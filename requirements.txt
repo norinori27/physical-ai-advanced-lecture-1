@@ -1,0 +1,22 @@
+# CPU 版。Kaggle では `pip install "jax[cuda12]"` に置き換える。
+# 主要パッケージは Kaggle(T4)で動作確認した版に固定している(Day 1)。
+jax==0.10.2
+mujoco==3.17.0
+mujoco-mjx==3.17.0
+warp-lang==1.18.0
+brax==0.14.2
+playground==0.2.0
+flax==0.12.8
+optax==0.2.8
+
+numpy
+scipy
+scikit-learn
+pandas
+
+matplotlib
+mediapy==1.2.7
+imageio[ffmpeg]
+opencv-python-headless
+
+tqdm

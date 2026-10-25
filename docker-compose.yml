@@ -1,0 +1,8 @@
+services:
+  dev:
+    build: .
+    image: openarm-anomaly:cpu
+    command: sleep infinity
+    volumes:
+      - .:/workspace
+    shm_size: "2gb"

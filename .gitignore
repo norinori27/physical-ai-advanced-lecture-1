@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+openarm_mujoco/
+outputs/
+checkpoints/
+data/
+*.mp4
