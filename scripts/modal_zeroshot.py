@@ -5,8 +5,10 @@ scripts/run_vla.py をそのサーバ(localhost)につないでシミュを回�
 openpi(numpy<2、JAX)とシミュ側(requirements.txt)は、別の Python 環境に分けている。
 
 使い方(ホストで、リポジトリのルートから。openarm_mujoco/ を先に取得しておく):
-    modal run scripts/modal_zeroshot.py --prompt "pick up the orange cube" --steps 150 --name zs_pick
-出力: outputs/zeroshot/<name>.mp4 と <name>.json
+    modal run scripts/modal_zeroshot.py --prompt "pick up the orange cube" --steps 150 --episodes 5 --name zs_pick
+出力: outputs/zeroshot/<name>_ep<i>.mp4 と .json(i = 0, 1, ...)
+openpi の Policy は乱数の種を指定しないと jax.random.key(0) から始め、推論ごとに分割して進める(policy.py)。
+そのため、同じサーバに続けて流したエピソードは別のノイズになり、新しいコンテナでは同じ列が繰り返される。
 初回はイメージのビルドと重みのダウンロード(Volume "openpi-cache" に保存)で時間がかかる。
 """
 import pathlib
@@ -47,10 +49,11 @@ cache = modal.Volume.from_name("openpi-cache", create_if_missing=True)
 
 # L4 が空かないときは、順に L40S、A100 40GB を試す(推論は 8 GB 超で足りる)。
 @app.function(gpu=["L4", "L40S", "A100-40GB"], timeout=3600, volumes={CACHE: cache})
-def run(prompt: str, steps: int, horizon: int, delta_scale: float, seed: int) -> dict:
-    import socket
+def run(prompt: str, steps: int, horizon: int, delta_scale: float, episodes: int) -> list[dict]:
     import subprocess
     import time
+
+    from websockets.sync.client import connect
 
     server = subprocess.Popen(["uv", "run", "--no-sync", "scripts/serve_policy.py", "--env=DROID"], cwd="/openpi")
     # 初回は重みのダウンロードがあるので長めに待つ。
@@ -59,7 +62,8 @@ def run(prompt: str, steps: int, horizon: int, delta_scale: float, seed: int) ->
         if server.poll() is not None:
             raise RuntimeError(f"推論サーバが終了した(code {server.returncode})")
         try:
-            socket.create_connection(("localhost", 8000), timeout=1).close()
+            # 正規の WebSocket 接続で確かめる(素の TCP 接続だと、サーバが handshake 失敗のログを出す)。
+            connect("ws://localhost:8000", open_timeout=2, max_size=None).close()
             break
         except OSError:
             if time.time() - t0 > 1800:
@@ -68,23 +72,28 @@ def run(prompt: str, steps: int, horizon: int, delta_scale: float, seed: int) ->
     print(f"server ready in {time.time() - t0:.0f}s")
     cache.commit()
 
-    out = "/tmp/out.mp4"
+    results = []
     try:
-        subprocess.run(["python", "scripts/run_vla.py", "--host", "localhost", "--port", "8000",
-                        "--prompt", prompt, "--steps", str(steps), "--horizon", str(horizon),
-                        "--delta-scale", str(delta_scale), "--seed", str(seed), "--out", out],
-                       cwd=PROJECT, check=True)
+        for i in range(episodes):
+            out = f"/tmp/out_ep{i}.mp4"
+            subprocess.run(["python", "scripts/run_vla.py", "--host", "localhost", "--port", "8000",
+                            "--prompt", prompt, "--steps", str(steps), "--horizon", str(horizon),
+                            "--delta-scale", str(delta_scale), "--seed", str(i), "--out", out],
+                           cwd=PROJECT, check=True)
+            results.append({"mp4": pathlib.Path(out).read_bytes(),
+                            "json": pathlib.Path(out.replace(".mp4", ".json")).read_bytes()})
     finally:
         server.terminate()
-    return {"mp4": pathlib.Path(out).read_bytes(), "json": pathlib.Path("/tmp/out.json").read_bytes()}
+    return results
 
 
 @app.local_entrypoint()
 def main(prompt: str = "pick up the orange cube", steps: int = 150, horizon: int = 8,
-         delta_scale: float = 0.2, seed: int = 0, name: str = "zs"):
-    res = run.remote(prompt, steps, horizon, delta_scale, seed)
+         delta_scale: float = 0.2, episodes: int = 1, name: str = "zs"):
+    results = run.remote(prompt, steps, horizon, delta_scale, episodes)
     out_dir = ROOT / "outputs" / "zeroshot"
     out_dir.mkdir(parents=True, exist_ok=True)
-    for ext in ("mp4", "json"):
-        (out_dir / f"{name}.{ext}").write_bytes(res[ext])
-        print("saved", out_dir / f"{name}.{ext}")
+    for i, res in enumerate(results):
+        for ext in ("mp4", "json"):
+            (out_dir / f"{name}_ep{i}.{ext}").write_bytes(res[ext])
+            print("saved", out_dir / f"{name}_ep{i}.{ext}")
