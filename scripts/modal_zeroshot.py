@@ -6,6 +6,7 @@ openpi(numpy<2、JAX)とシミュ側(requirements.txt)は、別の Python 環境
 
 使い方(ホストで、リポジトリのルートから。openarm_mujoco/ を先に取得しておく):
     modal run scripts/modal_zeroshot.py --prompt "pick up the orange cube" --steps 150 --episodes 5 --name zs_pick
+仮想 Franka 経由の付け替え(条件 B)は --retarget を付ける(例: --retarget --name zs_rt_pick)。
 出力: outputs/zeroshot/<name>_ep<i>.mp4 と .json(i = 0, 1, ...)
 openpi の Policy は乱数の種を指定しないと jax.random.key(0) から始め、推論ごとに分割して進める(policy.py)。
 そのため、同じサーバに続けて流したエピソードは別のノイズになり、新しいコンテナでは同じ列が繰り返される。
@@ -49,7 +50,8 @@ cache = modal.Volume.from_name("openpi-cache", create_if_missing=True)
 
 # L4 が空かないときは、順に L40S、A100 40GB を試す(推論は 8 GB 超で足りる)。
 @app.function(gpu=["L4", "L40S", "A100-40GB"], timeout=3600, volumes={CACHE: cache})
-def run(prompt: str, steps: int, horizon: int, delta_scale: float, episodes: int) -> list[dict]:
+def run(prompt: str, steps: int, horizon: int, delta_scale: float, episodes: int,
+        retarget: bool = False, track_yaw: bool = True) -> list[dict]:
     import subprocess
     import time
 
@@ -72,13 +74,14 @@ def run(prompt: str, steps: int, horizon: int, delta_scale: float, episodes: int
     print(f"server ready in {time.time() - t0:.0f}s")
     cache.commit()
 
+    extra = (["--retarget"] if retarget else []) + ([] if track_yaw else ["--no-track-yaw"])
     results = []
     try:
         for i in range(episodes):
             out = f"/tmp/out_ep{i}.mp4"
             subprocess.run(["python", "scripts/run_vla.py", "--host", "localhost", "--port", "8000",
                             "--prompt", prompt, "--steps", str(steps), "--horizon", str(horizon),
-                            "--delta-scale", str(delta_scale), "--seed", str(i), "--out", out],
+                            "--delta-scale", str(delta_scale), "--seed", str(i), "--out", out, *extra],
                            cwd=PROJECT, check=True)
             results.append({"mp4": pathlib.Path(out).read_bytes(),
                             "json": pathlib.Path(out.replace(".mp4", ".json")).read_bytes()})
@@ -89,8 +92,9 @@ def run(prompt: str, steps: int, horizon: int, delta_scale: float, episodes: int
 
 @app.local_entrypoint()
 def main(prompt: str = "pick up the orange cube", steps: int = 150, horizon: int = 8,
-         delta_scale: float = 0.2, episodes: int = 1, name: str = "zs"):
-    results = run.remote(prompt, steps, horizon, delta_scale, episodes)
+         delta_scale: float = 0.2, episodes: int = 1, name: str = "zs",
+         retarget: bool = False, track_yaw: bool = True):
+    results = run.remote(prompt, steps, horizon, delta_scale, episodes, retarget, track_yaw)
     out_dir = ROOT / "outputs" / "zeroshot"
     out_dir.mkdir(parents=True, exist_ok=True)
     for i, res in enumerate(results):
