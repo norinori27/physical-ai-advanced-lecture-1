@@ -45,7 +45,8 @@ app = modal.App("openarm-vla-zeroshot", image=image)
 cache = modal.Volume.from_name("openpi-cache", create_if_missing=True)
 
 
-@app.function(gpu="L4", timeout=3600, volumes={CACHE: cache})
+# L4 が空かないときは、順に L40S、A100 40GB を試す(推論は 8 GB 超で足りる)。
+@app.function(gpu=["L4", "L40S", "A100-40GB"], timeout=3600, volumes={CACHE: cache})
 def run(prompt: str, steps: int, horizon: int, delta_scale: float, seed: int) -> dict:
     import socket
     import subprocess
