@@ -32,13 +32,13 @@ PRECISE = ("align", "descend", "grasp", "lower", "release", "retreat_slow")
 LIFT = 0.15              # 持ち上げ・運搬の高さ(箱の中心の上、m)
 
 
-def run_episode(seed, render=True, dart_sigma=DART_SIGMA, condition="train", task=None, max_steps=400):
+def run_episode(seed, render=True, dart_sigma=DART_SIGMA, condition="train", task=None, max_steps=400, force=None):
     from openarm_anomaly.franka_retarget import franka_fk, franka_ik
     from openarm_anomaly.task import apply_task, place_success, sample_task
     from openarm_anomaly.vla_env import DroidStyleEnv
 
     rng = np.random.default_rng(seed)
-    task = task or sample_task(rng, condition, seed)
+    task = task or sample_task(rng, condition, seed, force=force)
     env = DroidStyleEnv(box_xy=task.box_xy, retarget=True, ready_tcp=task.ready_tcp, track_yaw=True, markers=True)
     box_yaw = apply_task(env, task)
     rt = env.rt
@@ -132,8 +132,8 @@ def run_episode(seed, render=True, dart_sigma=DART_SIGMA, condition="train", tas
 
 
 def worker(args):
-    seed, out, check, sigma = args
-    info, data = run_episode(seed, render=not check, dart_sigma=sigma)
+    seed, out, check, sigma, force = args
+    info, data = run_episode(seed, render=not check, dart_sigma=sigma, force=force)
     if not check and info["success"]:
         np.savez_compressed(os.path.join(out, f"ep_{seed:06d}.npz"), **data)
     return info
@@ -147,6 +147,7 @@ def main():
     ap.add_argument("--dart-sigma", type=float, default=DART_SIGMA)
     ap.add_argument("--out", default="data/demos")
     ap.add_argument("--check", action="store_true", help="描画も保存もせず、成功率だけを見る")
+    ap.add_argument("--force", default=None, help='水準を指定(JSON)。例: \'{"box_color": "red", "target": "blue", "template": 1}\'')
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
 
@@ -156,7 +157,8 @@ def main():
             need = args.n - sum(i["success"] for i in infos)
             batch = list(range(seed, seed + max(int(need * 1.2), args.workers)))
             seed += len(batch)
-            for info in pool.imap_unordered(worker, [(s, args.out, args.check, args.dart_sigma) for s in batch]):
+            force = json.loads(args.force) if args.force else None
+            for info in pool.imap_unordered(worker, [(s, args.out, args.check, args.dart_sigma, force) for s in batch]):
                 infos.append(info)
                 t = info["task"]
                 print(f"seed {info['seed']:6d} ok {info['success']:d} steps {info['steps']:3d} "
@@ -169,7 +171,8 @@ def main():
     ok = [i for i in infos if i["success"]]
     print(f"success {len(ok)}/{len(infos)}, steps mean {np.mean([i['steps'] for i in ok]) if ok else 0:.0f}")
     if not args.check:
-        with open(os.path.join(args.out, "summary.json"), "w") as f:
+        name = "summary.json" if not args.force else f"summary_{args.seed0}.json"
+        with open(os.path.join(args.out, name), "w") as f:
             json.dump({"dart_sigma": args.dart_sigma, "episodes": infos}, f, indent=1)
 
 

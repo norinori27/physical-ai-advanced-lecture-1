@@ -77,8 +77,9 @@ def _sample_xy(rng, region, n, outer_only=False, inner=POS_INNER, tries=1000):
     raise RuntimeError("配置が見つからない")
 
 
-def sample_task(rng, condition="train", seed=0):
-    """condition: train / base / pos_outer / goal_color / light / box_color / language"""
+def sample_task(rng, condition="train", seed=0, force=None):
+    """condition: train / base / pos_outer / goal_color / light / box_color / language
+    force: 学習の水準を指定する {"box_color": ..., "target": ..., "template": 0〜2}(水準ごとの本数を揃えるため)。"""
     markers_pool, boxes, templates = MARKERS_TRAIN, BOXES_TRAIN, TEMPLATES_TRAIN
     region, outer = POS_INNER, False
     if condition == "pos_outer":
@@ -99,6 +100,14 @@ def sample_task(rng, condition="train", seed=0):
     else:
         diffuse = rng.uniform(*LIGHT_TRAIN["diffuse"])
         lpos = (rng.uniform(-1, 1) * LIGHT_TRAIN["xy"], rng.uniform(-1, 1) * LIGHT_TRAIN["xy"], 2.0)
+    if force:
+        box_color = force.get("box_color", box_color)
+        template = TEMPLATES_TRAIN[force["template"]] if "template" in force else template
+        if "target" in force and force["target"] in colors:
+            target = force["target"]
+        elif "target" in force:      # ゴールの色が置いた 2 色に無ければ、もう 1 色と入れ替える
+            colors[colors.index(target)] = force["target"]
+            target = force["target"]
     return TaskSpec(box_xy=tuple(map(float, pts[0])), box_color=box_color,
                     markers=[(c, tuple(map(float, p))) for c, p in zip(colors, pts[1:])],
                     target=target, template=template, ready_tcp=tuple(map(float, ready)),
