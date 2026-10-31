@@ -66,6 +66,9 @@ def _extract_datasets():
     t0 = time.time()
     os.makedirs("/tmp/lerobot/local", exist_ok=True)
     for tar in LEROBOT_TARS:
+        if not os.path.exists(tar):     # 変換がまだのものは飛ばす(smoke は検証用データだけで回せる)
+            print("skip (not converted yet):", tar, flush=True)
+            continue
         with tarfile.open(tar) as tf:
             tf.extractall("/tmp/lerobot/local")
     print(f"datasets extracted in {time.time() - t0:.0f}s", flush=True)
@@ -90,13 +93,16 @@ def _run(cmd, log=None, cwd=PROJECT):
 
 
 @app.function(volumes=VOLS, cpu=16, memory=32768, timeout=4 * 3600)
-def convert():
-    """手元のディスク(/tmp/lerobot)に変換し、1 つの tar にまとめて Volume に置く。"""
+def convert(which: str = "both"):
+    """手元のディスク(/tmp/lerobot)に変換し、1 つの tar にまとめて Volume に置く。which: both / train / val"""
     import os
     import tarfile
     os.makedirs("/data/lerobot_tar", exist_ok=True)
-    for src, repo, name, tar in (("/data/npz/demos", "local/openarm_place", "train", LEROBOT_TARS[0]),
-                                 ("/data/npz/demos_val", "local/openarm_place_val", "val", LEROBOT_TARS[1])):
+    jobs = (("/data/npz/demos", "local/openarm_place", "train", LEROBOT_TARS[0]),
+            ("/data/npz/demos_val", "local/openarm_place_val", "val", LEROBOT_TARS[1]))
+    for src, repo, name, tar in jobs:
+        if which != "both" and which != name:
+            continue
         _run(UV + [f"{PROJECT}/scripts/convert_lerobot.py", "--src", src, "--repo-id", repo,
                    "--stats-out", f"/data/stats_{name}.json"])
         with tarfile.open(tar + ".tmp", "w") as tf:
@@ -108,7 +114,7 @@ def convert():
 
 
 @app.function(volumes=VOLS, gpu=["H100", "A100-80GB"], cpu=8, memory=65536, timeout=24 * 3600)
-def train(exp: str, steps: int, smoke: bool = False, resume: bool = False, overwrite: bool = False):
+def train(exp: str, steps: int, smoke: bool = False, resume: bool = False, overwrite: bool = False, repo: str = ""):
     import os
     os.makedirs("/ckpt/logs", exist_ok=True)
     _extract_datasets()
@@ -116,6 +122,7 @@ def train(exp: str, steps: int, smoke: bool = False, resume: bool = False, overw
     cmd += ["--smoke"] if smoke else []
     cmd += ["--resume"] if resume else []
     cmd += ["--overwrite"] if overwrite else []
+    cmd += ["--repo-id", repo] if repo else []
     _run(cmd, log=f"/ckpt/logs/{exp}.log")
     ckpt.commit()
 
@@ -205,9 +212,14 @@ def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, see
         print("uploaded")
     elif action == "convert":
         convert.remote()
+    elif action == "convert_val":     # 検証用だけ(smoke を早く始めるため)
+        convert.remote("val")
+    elif action == "convert_train":
+        convert.remote("train")
     elif action == "smoke":
         name = f"{exp}_smoke"
-        train.remote(name, 200, smoke=True, overwrite=True)
+        # 配線の確認なので、学習データの変換を待たずに検証用データで学習する
+        train.remote(name, 200, smoke=True, overwrite=True, repo="local/openarm_place_val")
         print(val.remote(name, base=True))
         evaluate.remote(f"{name}_s199", exp=name, step=199, conditions="base", seeds=1, max_steps=60)
         print("smoke OK: 学習 → 保存 → 検証 → 推論サーバ → 評価 まで通った")
