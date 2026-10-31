@@ -10,7 +10,9 @@ Volume: openpi-cache(重みなどの取得物、/cache)、openarm-data(デモと
   5. modal run scripts/modal_train.py --action val --exp run1           # 保存済みの全ステップの検証ロス(計算済みは飛ばす)
      modal run scripts/modal_train.py --action eval --exp run1 --step 3000 --seeds 5      # 途中の重みでシミュ評価
      modal run scripts/modal_train.py --action eval_base --seeds 5      # 微調整前(pi05_droid)を同じ条件で評価
-  6. modal run scripts/modal_train.py --action fetch --tag run1_s3000   # 評価の結果(jsonl と mp4)を outputs/eval/ へ
+  6. modal run scripts/modal_train.py --action analyze --exp run1 --step 8000 --tag run1_s8000      # 考察用の分析
+     modal run scripts/modal_train.py --action analyze_base --tag base                             # 微調整前で同じ分析
+  7. modal run scripts/modal_train.py --action fetch --tag run1_s3000   # 評価・分析の結果(jsonl、mp4、json)を outputs/eval/ へ
      重い npz は `modal volume get openarm-ckpt eval/<tag> outputs/eval/` で取得する。
   学習のログ: `modal volume get openarm-ckpt logs/run1.log -`
 """
@@ -173,9 +175,29 @@ def evaluate(tag: str, exp: str = "", step: int = 0, base: bool = False, conditi
         ckpt.commit()
 
 
+@app.function(volumes=VOLS, gpu=["L40S", "A100-40GB", "A100-80GB"], timeout=4 * 3600)
+def analyze(tag: str, exp: str = "", step: int = 0, base: bool = False, episodes_tag: str = "", what: str = "",
+            max_episodes: int = 6):
+    cmd = UV + [f"{PROJECT}/scripts/analyze_policy.py", "--episodes", f"/ckpt/eval/{episodes_tag or tag}",
+                "--out", f"/ckpt/analysis/{tag}", "--max-episodes", str(max_episodes)]
+    cmd += ["--base"] if base else ["--exp-name", exp, "--step", str(step)]
+    cmd += ["--what", *what.split(",")] if what else []
+    _run(cmd, log=f"/ckpt/logs/analysis_{tag}.log")
+    ckpt.commit()
+
+
+def _exists(path):
+    try:
+        next(iter(ckpt.listdir(path)), None)
+        return True
+    except Exception:
+        return False
+
+
 @app.local_entrypoint()
 def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, seeds: int = 5, conditions: str = "",
-         tag: str = "", val_steps: str = "", resume: bool = False, overwrite: bool = False, max_steps: int = 450):
+         tag: str = "", val_steps: str = "", resume: bool = False, overwrite: bool = False, max_steps: int = 450,
+         episodes_tag: str = "", what: str = ""):
     if action == "upload":
         with data.batch_upload(force=True) as b:
             b.put_directory(str(ROOT / "data" / "demos"), "/npz/demos")
@@ -198,12 +220,18 @@ def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, see
         evaluate.remote(tag or f"{exp}_s{step}", exp=exp, step=step, conditions=conditions, seeds=seeds, max_steps=max_steps)
     elif action == "eval_base":
         evaluate.remote(tag or "base", base=True, conditions=conditions, seeds=seeds, max_steps=max_steps)
+    elif action == "analyze":     # 例: --action analyze --exp run1 --step 8000 --tag run1_s8000 [--episodes-tag base]
+        analyze.remote(tag or f"{exp}_s{step}", exp=exp, step=step, episodes_tag=episodes_tag, what=what)
+    elif action == "analyze_base":
+        analyze.remote(tag or "base", base=True, episodes_tag=episodes_tag, what=what)
     elif action == "fetch":
         out = ROOT / "outputs" / "eval" / tag
         out.mkdir(parents=True, exist_ok=True)
-        for entry in ckpt.listdir(f"/eval/{tag}"):
+        entries = list(ckpt.listdir(f"/eval/{tag}")) if _exists(f"/eval/{tag}") else []
+        entries += list(ckpt.listdir(f"/analysis/{tag}")) if _exists(f"/analysis/{tag}") else []
+        for entry in entries:
             name = pathlib.Path(entry.path).name
-            if name.endswith((".jsonl", ".mp4")):
+            if name.endswith((".jsonl", ".mp4", ".json")):
                 with open(out / name, "wb") as f:
                     for chunk in ckpt.read_file(entry.path):
                         f.write(chunk)
