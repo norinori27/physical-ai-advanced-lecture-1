@@ -74,6 +74,21 @@ def run(prompt: str, steps: int, horizon: int, delta_scale: float, episodes: int
     print(f"server ready in {time.time() - t0:.0f}s")
     cache.commit()
 
+    # 初回の推論は JAX のコンパイルで時間がかかり、その間サーバが keepalive の ping に応えられず、
+    # クライアント(run_vla.py)が切断されることがある。ping を切った接続で 1 回推論しておく。
+    import numpy as np
+    from openpi_client import msgpack_numpy
+    t1 = time.time()
+    with connect("ws://localhost:8000", max_size=None, compression=None, ping_interval=None) as ws:
+        ws.recv()   # サーバのメタデータ
+        img = np.zeros((224, 224, 3), np.uint8)
+        ws.send(msgpack_numpy.Packer().pack({
+            "observation/exterior_image_1_left": img, "observation/wrist_image_left": img,
+            "observation/joint_position": np.zeros(7), "observation/gripper_position": np.zeros(1),
+            "prompt": prompt}))
+        ws.recv()
+    print(f"warm-up inference in {time.time() - t1:.0f}s")
+
     extra = ((["--retarget"] if retarget else []) + ([] if track_yaw else ["--no-track-yaw"])
              + (["--hide-fingers"] if hide_fingers else []))
     results = []
