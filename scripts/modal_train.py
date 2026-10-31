@@ -223,6 +223,11 @@ def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, see
         print(val.remote(name, base=True))
         evaluate.remote(f"{name}_s199", exp=name, step=199, conditions="base", seeds=1, max_steps=60)
         print("smoke OK: 学習 → 保存 → 検証 → 推論サーバ → 評価 まで通った")
+    elif action == "smoke_rest":     # smoke の学習が済んでいるとき、検証と評価だけを確かめる
+        name = f"{exp}_smoke"
+        print(val.remote(name, base=True))
+        evaluate.remote(f"{name}_s199", exp=name, step=199, conditions="base", seeds=1, max_steps=60)
+        print("smoke OK: 検証 → 推論サーバ → 評価 まで通った")
     elif action == "train":
         call = train.spawn(exp, steps, resume=resume, overwrite=overwrite)
         print("spawned:", call.object_id, "(--detach で実行していれば、端末を閉じても続く)")
