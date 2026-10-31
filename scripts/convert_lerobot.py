@@ -1,10 +1,12 @@
 """gen_demos.py の npz を、openpi の DROID 形式の LeRobot データセットにする(openpi の環境で実行)。
 
 項目は openpi の examples/droid/convert_droid_data_to_lerobot.py と同じ(画像は 180x320、15 fps、行動は関節速度 7 + グリッパ 1)。
-exterior_image_2_left は openpi の LeRobotDROIDDataConfig の repack で必須なので、外部カメラ 1 の画像を入れる(モデルは使わない)。
+exterior_image_2_left は openpi の LeRobotDROIDDataConfig の repack で必須だが、モデルは使わない(DroidInputs は
+exterior_image_1_left と wrist_image_left だけを使う)ので、黒画像を入れる(書き出しを軽くするため)。
 最後に、状態と行動の分位点を DROID の正規化の統計(pi05_droid の assets)と並べて表示し、JSON に保存する。
 
-使い方: HF_LEROBOT_HOME=/data/lerobot uv run --no-sync python convert_lerobot.py --src /data/npz/demos --repo-id local/openarm_place
+使い方: HF_LEROBOT_HOME=/tmp/lerobot uv run --no-sync python convert_lerobot.py --src /data/npz/demos --repo-id local/openarm_place
+(書き出し先は手元のディスクにする。Modal の Volume に小さな PNG を大量に書くと、1 エピソード 1 分かかった)
 """
 import argparse
 import glob
@@ -37,6 +39,7 @@ def main():
         image_writer_threads=10, image_writer_processes=5)
 
     files = sorted(glob.glob(os.path.join(args.src, "ep_*.npz")))
+    black = np.zeros((180, 320, 3), np.uint8)
     states, actions, prompts = [], [], {}
     for i, f in enumerate(files):
         d = np.load(f)
@@ -44,7 +47,7 @@ def main():
         prompts[prompt] = prompts.get(prompt, 0) + 1
         for t in range(len(d["actions"])):
             ds.add_frame({"exterior_image_1_left": d["exterior_image_1_left"][t],
-                          "exterior_image_2_left": d["exterior_image_1_left"][t],
+                          "exterior_image_2_left": black,
                           "wrist_image_left": d["wrist_image_left"][t],
                           "joint_position": d["joint_position"][t].astype(np.float32),
                           "gripper_position": d["gripper_position"][t].astype(np.float32),

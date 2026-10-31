@@ -38,7 +38,7 @@ image = (
         "pip install /openpi/packages/openpi-client",
     )
     .env({"MUJOCO_GL": "osmesa", "PYOPENGL_PLATFORM": "osmesa", "OPENPI_DATA_HOME": "/cache",
-          "HF_LEROBOT_HOME": "/data/lerobot", "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.9"})
+          "HF_LEROBOT_HOME": "/tmp/lerobot", "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.9"})
     .add_local_dir(ROOT / "src", f"{PROJECT}/src")
     .add_local_dir(ROOT / "scripts", f"{PROJECT}/scripts")
     .add_local_dir(ROOT / "openarm_mujoco" / "v1", f"{PROJECT}/openarm_mujoco/v1")
@@ -50,6 +50,23 @@ data = modal.Volume.from_name("openarm-data", create_if_missing=True)
 ckpt = modal.Volume.from_name("openarm-ckpt", create_if_missing=True)
 VOLS = {"/cache": cache, "/data": data, "/ckpt": ckpt}
 UV = ["uv", "run", "--no-sync", "--project", "/openpi", "python"]
+
+
+LEROBOT_TARS = ("/data/lerobot_tar/openarm_place.tar", "/data/lerobot_tar/openarm_place_val.tar")
+
+
+def _extract_datasets():
+    """LeRobot のデータセット(Volume 上の tar)を手元のディスク(HF_LEROBOT_HOME=/tmp/lerobot)に展開する。
+    小さな PNG を Volume から直接読むと遅いため。"""
+    import os
+    import tarfile
+    import time
+    t0 = time.time()
+    os.makedirs("/tmp/lerobot/local", exist_ok=True)
+    for tar in LEROBOT_TARS:
+        with tarfile.open(tar) as tf:
+            tf.extractall("/tmp/lerobot/local")
+    print(f"datasets extracted in {time.time() - t0:.0f}s", flush=True)
 
 
 def _run(cmd, log=None, cwd=PROJECT):
@@ -70,12 +87,20 @@ def _run(cmd, log=None, cwd=PROJECT):
         raise RuntimeError(f"失敗: {' '.join(cmd)} (code {p.returncode})")
 
 
-@app.function(volumes=VOLS, cpu=8, memory=32768, timeout=4 * 3600)
+@app.function(volumes=VOLS, cpu=16, memory=32768, timeout=4 * 3600)
 def convert():
-    for src, repo, name in (("/data/npz/demos", "local/openarm_place", "train"),
-                            ("/data/npz/demos_val", "local/openarm_place_val", "val")):
+    """手元のディスク(/tmp/lerobot)に変換し、1 つの tar にまとめて Volume に置く。"""
+    import os
+    import tarfile
+    os.makedirs("/data/lerobot_tar", exist_ok=True)
+    for src, repo, name, tar in (("/data/npz/demos", "local/openarm_place", "train", LEROBOT_TARS[0]),
+                                 ("/data/npz/demos_val", "local/openarm_place_val", "val", LEROBOT_TARS[1])):
         _run(UV + [f"{PROJECT}/scripts/convert_lerobot.py", "--src", src, "--repo-id", repo,
                    "--stats-out", f"/data/stats_{name}.json"])
+        with tarfile.open(tar + ".tmp", "w") as tf:
+            tf.add(f"/tmp/lerobot/{repo}", arcname=repo.split("/")[1])
+        os.replace(tar + ".tmp", tar)
+        print("saved", tar, f"{os.path.getsize(tar) / 1e9:.2f} GB", flush=True)
     cache.commit()
     data.commit()
 
@@ -84,6 +109,7 @@ def convert():
 def train(exp: str, steps: int, smoke: bool = False, resume: bool = False, overwrite: bool = False):
     import os
     os.makedirs("/ckpt/logs", exist_ok=True)
+    _extract_datasets()
     cmd = UV + [f"{PROJECT}/scripts/openpi_train.py", "--exp-name", exp, "--steps", str(steps)]
     cmd += ["--smoke"] if smoke else []
     cmd += ["--resume"] if resume else []
@@ -94,6 +120,7 @@ def train(exp: str, steps: int, smoke: bool = False, resume: bool = False, overw
 
 @app.function(volumes=VOLS, gpu=["L40S", "A100-40GB", "A100-80GB"], timeout=3 * 3600)
 def val(exp: str, steps: str = "", base: bool = False):
+    _extract_datasets()
     cmd = UV + [f"{PROJECT}/scripts/openpi_val.py", "--exp-name", exp]
     cmd += ["--steps", *steps.split(",")] if steps else []
     cmd += ["--base"] if base else []
