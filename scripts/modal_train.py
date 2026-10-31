@@ -113,7 +113,7 @@ def convert(which: str = "both"):
     data.commit()
 
 
-@app.function(volumes=VOLS, gpu=["H100", "A100-80GB"], cpu=8, memory=65536, timeout=24 * 3600)
+@app.function(volumes=VOLS, gpu=["H100", "A100-80GB"], cpu=16, memory=65536, timeout=24 * 3600)
 def train(exp: str, steps: int, smoke: bool = False, resume: bool = False, overwrite: bool = False, repo: str = ""):
     import os
     os.makedirs("/ckpt/logs", exist_ok=True)

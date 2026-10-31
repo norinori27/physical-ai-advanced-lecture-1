@@ -20,6 +20,7 @@ def main():
     ap.add_argument("--steps", type=int, default=15_000)
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--save-interval", type=int, default=1000)
+    ap.add_argument("--num-workers", type=int, default=12, help="データ読み込みの並列数(PNG の展開が律速になりうる)")
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--overwrite", action="store_true")
     ap.add_argument("--smoke", action="store_true")
@@ -27,7 +28,7 @@ def main():
     args = ap.parse_args()
     steps, save = (200, 100) if args.smoke else (args.steps, args.save_interval)
     cfg = openpi_cfg.make_config(args.exp_name, num_train_steps=steps, batch_size=args.batch_size, save_interval=save,
-                                 warmup_steps=min(500, steps // 10), **({"repo_id": args.repo_id} if args.repo_id else {}))
+                                 warmup_steps=min(500, steps // 10), num_workers=args.num_workers, **({"repo_id": args.repo_id} if args.repo_id else {}))
     cfg = dataclasses.replace(cfg, resume=args.resume, overwrite=args.overwrite)
     print(cfg, flush=True)
     openpi_train.main(cfg)
