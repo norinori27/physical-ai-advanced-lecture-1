@@ -36,11 +36,11 @@ def main():
         ckpt = pathlib.Path(cfg.checkpoint_dir) / str(args.step)
         policy = policy_config.create_trained_policy(cfg, ckpt)
         from flax import nnx
-        state = nnx.state(policy._model)
-        lora = [np.abs(np.asarray(v)).mean() for p, v in jax.tree_util.tree_leaves_with_path(state.to_pure_dict())
-                if "lora" in jax.tree_util.keystr(p) and "lora_b" in jax.tree_util.keystr(p).lower()]
-        print(f"LoRA B の重み: {len(lora)} 個、平均絶対値 {np.mean(lora) if lora else float('nan'):.2e}"
-              "(初期値なら約 0.008)", flush=True)
+        flat = jax.tree_util.tree_leaves_with_path(nnx.state(policy._model).to_pure_dict())
+        lora = [float(np.abs(np.asarray(v, np.float32)).mean()) for p, v in flat
+                if "lora_b" in jax.tree_util.keystr(p)]
+        mean = float(np.mean(lora)) if lora else float("nan")
+        print(f"LoRA B の重み: {len(lora)} 個、平均絶対値 {mean:.3e}(初期値なら約 0.008)", flush=True)
         if not lora:
             raise RuntimeError("LoRA の重みが見つからない(LoRA なしの設定で読み込んでいる)")
     server = websocket_policy_server.WebsocketPolicyServer(policy=policy, host="0.0.0.0", port=args.port,
