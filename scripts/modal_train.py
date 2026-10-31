@@ -201,6 +201,11 @@ def _exists(path):
         return False
 
 
+@app.function(volumes=VOLS, cpu=8, memory=98304, timeout=3600)
+def param_delta(exp: str, step: int):
+    _run(UV + [f"{PROJECT}/scripts/param_delta.py", "--exp-name", exp, "--step", str(step)])
+
+
 @app.local_entrypoint()
 def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, seeds: int = 5, conditions: str = "",
          tag: str = "", val_steps: str = "", resume: bool = False, overwrite: bool = False, max_steps: int = 450,
@@ -241,6 +246,8 @@ def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, see
         analyze.remote(tag or f"{exp}_s{step}", exp=exp, step=step, episodes_tag=episodes_tag, what=what)
     elif action == "analyze_base":
         analyze.remote(tag or "base", base=True, episodes_tag=episodes_tag, what=what)
+    elif action == "param_delta":     # 例: --action param_delta --exp run1_smoke --step 199
+        param_delta.remote(exp, step)
     elif action == "fetch":
         out = ROOT / "outputs" / "eval" / tag
         out.mkdir(parents=True, exist_ok=True)
