@@ -43,19 +43,26 @@ def main():
     stats = {}
     for k, v in flat_new.items():
         g = group(k)
-        s = stats.setdefault(g, {"n_params": 0, "n_changed_tensors": 0, "n_tensors": 0, "delta_fro2": 0.0, "w_fro2": 0.0})
+        dtype = str(np.asarray(v).dtype)
+        s = stats.setdefault(g, {"n_params": 0, "n_changed_tensors": 0, "n_tensors": 0, "delta_fro2": 0.0, "w_fro2": 0.0,
+                                 "dtypes": []})
+        if dtype not in s["dtypes"]:
+            s["dtypes"].append(dtype)
         v = np.asarray(v, np.float32)
         s["n_params"] += v.size
         s["n_tensors"] += 1
         s["w_fro2"] += float(np.sum(v ** 2))
         if k in flat_old:
-            d = v - np.asarray(flat_old[k], np.float32)
+            # openpi は固定した重みを bfloat16 にして保存する(scripts/train.py)。元の重みも同じ精度に丸めてから比べる
+            ref = np.asarray(np.asarray(flat_old[k]).astype(np.asarray(flat_new[k]).dtype), np.float32)
+            d = v - ref
             s["delta_fro2"] += float(np.sum(d ** 2))
             s["n_changed_tensors"] += int(np.any(d != 0))
     for g, s in sorted(stats.items()):
         rel = (s["delta_fro2"] / s["w_fro2"]) ** 0.5 if s["w_fro2"] else 0
         print(f"{g:26s} パラメータ {s['n_params'] / 1e6:8.1f}M  テンソル {s['n_tensors']:4d}  変化したテンソル {s['n_changed_tensors']:4d}  "
-              f"||ΔW||/||W|| {rel:.2e}  ||W|| {s['w_fro2'] ** 0.5:.1f}", flush=True)
+              f"||ΔW||/||W|| {rel:.2e}  ||W|| {s['w_fro2'] ** 0.5:.1f}  dtype {s['dtypes']}", flush=True)
+    print("LoRA は元の重みに無いので比較しない(変化したテンソル 0 は「比較対象なし」の意味)")
     out = pathlib.Path(cfg.checkpoint_dir) / f"param_delta_{args.step}.json"
     out.write_text(json.dumps(stats, indent=1))
     print("saved", out)
