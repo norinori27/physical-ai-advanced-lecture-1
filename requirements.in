@@ -1,0 +1,14 @@
+# コンテナ内(CPU)のシミュ側。推論サーバ(openpi)と微調整は Modal の中で動かすので、ここには入れない。
+# 直接使うパッケージの一覧。実際に入る版(間接依存を含む)とハッシュは requirements.txt に固定してある。
+# mujoco と mediapy は旧環境で動作確認した版。他は旧環境の import から拾ったもの。
+mujoco==3.17.0
+mediapy==1.2.7
+numpy
+scipy
+trimesh
+fast-simplification
+pillow
+imageio[ffmpeg]
+opencv-python-headless
+# openpi-client: run_vla.py が import する。PyPI の同名パッケージは個人アカウントの配布で、公式と確認できないため使わない。
+# Modal 側のイメージに、公式リポジトリ(Physical-Intelligence/openpi の packages/openpi-client)から、特定のコミットで入れる。

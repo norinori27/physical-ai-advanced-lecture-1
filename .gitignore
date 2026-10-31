@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+openarm_mujoco/
+outputs/
+checkpoints/
+data/
+*.mp4
+tmp/
+.env
+
+# git ではコードだけを管理する。文書と、Claude 用の隔離環境の設定は入れない。
+# (再現用の環境は docker/Dockerfile)
+CLAUDE.md
+PLAN.md
+PLAN_VLA.md
+.devcontainer/
+/Dockerfile
+/docker-compose.yml
