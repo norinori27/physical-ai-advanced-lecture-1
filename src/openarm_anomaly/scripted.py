@@ -62,21 +62,29 @@ class Kinematics:
         mujoco.mj_comPos(self.m, self.d)
         return self.d.site_xpos[self.site].copy(), self.d.site_xmat[self.site].reshape(3, 3).copy()
 
-    def solve(self, q, p_des, iters=3, max_step=0.1, z_des=DOWN, yaw=None):
+    def solve(self, q, p_des, iters=3, max_step=0.1, z_des=DOWN, yaw=None, damping=1e-4, yaw_weight=None):
         """直前の解から追従する増分 IK(連続な軌道用)。z_des は site の z 軸を向ける方向。
-        yaw を渡すと、site の x 軸を水平面で yaw [rad] の向きに保つ(6 自由度を拘束)。"""
+        yaw を渡すと、site の x 軸を水平面で yaw [rad] の向きに保つ(6 自由度を拘束)。
+        yaw_weight(0〜1)を渡すと、ヨー(鉛直軸まわりの回転)の誤差だけ重みを下げ、位置と真下向きを優先する
+        (届かないヨーを指令されたとき、位置を犠牲にして手先が流れるのを防ぐ)。"""
         q = q.copy()
         for _ in range(iters):
             p, R = self.fk(q)
-            if yaw is None:
-                rot_err = np.cross(R[:, 2], z_des)
-            else:
-                xd, yd = frame_from_z_yaw(z_des, yaw)
-                rot_err = 0.5 * (np.cross(R[:, 0], xd) + np.cross(R[:, 1], yd) + np.cross(R[:, 2], z_des))
-            err = np.concatenate([p_des - p, rot_err])
             mujoco.mj_jacSite(self.m, self.d, self.jac_p, self.jac_r, self.site)
             J = np.vstack([self.jac_p, self.jac_r])[:, :N_ARM]
-            dq = J.T @ np.linalg.solve(J @ J.T + 1e-4 * np.eye(6), err)
+            if yaw is None:
+                rot_err = np.cross(R[:, 2], z_des)
+            elif yaw_weight is None:
+                xd, yd = frame_from_z_yaw(z_des, yaw)
+                rot_err = 0.5 * (np.cross(R[:, 0], xd) + np.cross(R[:, 1], yd) + np.cross(R[:, 2], z_des))
+            else:
+                e_yaw = (yaw - np.arctan2(R[1, 0], R[0, 0]) + np.pi) % (2 * np.pi) - np.pi
+                rot_err = np.cross(R[:, 2], z_des) + np.array([0, 0, e_yaw])
+                rot_err[2] *= yaw_weight
+                J = J.copy()
+                J[5] *= yaw_weight
+            err = np.concatenate([p_des - p, rot_err])
+            dq = J.T @ np.linalg.solve(J @ J.T + damping * np.eye(6), err)
             q = np.clip(q + np.clip(dq, -max_step, max_step), self.lo, self.hi)
         return q
 

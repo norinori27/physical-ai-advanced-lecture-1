@@ -1,6 +1,7 @@
 """pi05_droid(DROID 形式)の入出力で OpenArm のシミュを動かす薄い環境。
 
-入力(openpi の droid_policy.py): 外部画像・手首画像(224x224)、関節角 7、グリッパ位置 1(0 開 → 1 閉)、指示文。
+入力(openpi の droid_policy.py): 外部画像・手首画像、関節角 7、グリッパ位置 1(0 開 → 1 閉)、指示文。
+画像は DROID と同じ 320x180 で描画する(DROID は 16:9 の画像を resize_with_pad で 224x224 にしてから入れる)。
 出力: 8 次元(関節速度 7 + グリッパ位置 1)。DROID の実機側では、速度 × 0.2 rad を 1 ステップの関節変位とし、
 グリッパは 0.5 で 2 値化する(droid の robot_ik_solver.py と openpi の examples/droid/main.py)。
 変位を「現在の関節角に足す」のか「前回の目標に足す」のかは、読んだコードからは確認できていない(ここでは現在の関節角)。
@@ -18,13 +19,17 @@ from .scripted import GRIP_CLOSE, GRIP_OPEN, N_ARM, Kinematics, reset_to_ready
 
 DELTA_SCALE = 0.2   # rad / ステップ(DROID 実機側の max_joint_delta)
 CONTROL_HZ = 15
-IMG = 224
+IMG_HW = (180, 320)   # DROID と同じ 16:9。モデルに入れる前に resize_with_pad で 224x224(上下に黒帯)にする
 
 
 class DroidStyleEnv:
     def __init__(self, box_half=0.035, box_xy=(0.18, -0.36), obstacles=(), delta_scale=DELTA_SCALE,
-                 retarget=False, ready_tcp=None, track_yaw=True, hide_fingers=False):
+                 retarget=False, ready_tcp=None, track_yaw=True, hide_fingers=False, markers=False,
+                 ik_damping=1e-4, max_dq=None, ik_yaw_weight=0.3):
         spec = build_spec(box_half=box_half, timestep=0.004, box_xy=box_xy, obstacles=obstacles)
+        if markers:   # 色つきマーカー(task.py)。置き先のタスク用
+            from .task import add_markers
+            add_markers(spec)
         lighten_visual_meshes(spec)
         self.m = spec.compile()
         self.m.light_castshadow[:] = 0
@@ -34,11 +39,15 @@ class DroidStyleEnv:
         self.substeps = round(1.0 / CONTROL_HZ / self.m.opt.timestep)   # 17 回 = 0.068 s(約 14.7 Hz)
         self.lo, self.hi = self.m.actuator_ctrlrange[:N_ARM, 0], self.m.actuator_ctrlrange[:N_ARM, 1]
         self.retarget, self.ready_tcp, self.track_yaw = retarget, ready_tcp, track_yaw
+        # 付け替え時の OpenArm の IK: 減衰(特異姿勢の近くで解が跳ぶのを抑える)と、1 ステップの関節変化の上限(rad)
+        self.ik_damping, self.max_dq = ik_damping, max_dq
+        # None: ヨーも位置と同じ重み(10-31 のゼロショット zs_rt_* はこれ)。0〜1: 位置を優先(既定 0.3)
+        self.ik_yaw_weight = ik_yaw_weight
         self.kin = Kinematics(self.m)
         # hide_fingers: 手首画像だけ、ハンドと指の見た目(group 2)を透明にする(DROID と違う指を見せない)
         self.hide_ids = [g for g in range(self.m.ngeom) if self.m.geom_group[g] == 2 and any(
             k in self.m.body(self.m.geom_bodyid[g]).name for k in ("hand", "finger"))] if hide_fingers else []
-        self.renderer = mujoco.Renderer(self.m, IMG, IMG)
+        self.renderer = mujoco.Renderer(self.m, *IMG_HW)
         self.reset()
 
     def reset(self):
@@ -89,7 +98,11 @@ class DroidStyleEnv:
             p_des, R_des = self.rt.target(a)
             yaw = np.arctan2(R_des[1, 0], R_des[0, 0]) if self.track_yaw else None
             # 手先は真下向きだけを拘束する(シーンの決まり)。Franka 側の傾きは捨てる。
-            self.q_cmd = self.kin.solve(self.q_cmd, p_des, iters=10, yaw=yaw)
+            q_new = self.kin.solve(self.q_cmd, p_des, iters=10, yaw=yaw, damping=self.ik_damping,
+                                   yaw_weight=self.ik_yaw_weight)
+            if self.max_dq is not None:
+                q_new = self.q_cmd + np.clip(q_new - self.q_cmd, -self.max_dq, self.max_dq)
+            self.q_cmd = q_new
             target = self.q_cmd
         self.d.ctrl[:N_ARM] = target
         self.d.ctrl[N_ARM] = GRIP_CLOSE if a[N_ARM] > 0.5 else GRIP_OPEN

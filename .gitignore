@@ -16,3 +16,4 @@ PLAN_VLA.md
 .devcontainer/
 /Dockerfile
 /docker-compose.yml
+third_party/
