@@ -23,7 +23,7 @@ IMG = 224
 
 class DroidStyleEnv:
     def __init__(self, box_half=0.035, box_xy=(0.18, -0.36), obstacles=(), delta_scale=DELTA_SCALE,
-                 retarget=False, ready_tcp=None, track_yaw=True):
+                 retarget=False, ready_tcp=None, track_yaw=True, hide_fingers=False):
         spec = build_spec(box_half=box_half, timestep=0.004, box_xy=box_xy, obstacles=obstacles)
         lighten_visual_meshes(spec)
         self.m = spec.compile()
@@ -35,6 +35,9 @@ class DroidStyleEnv:
         self.lo, self.hi = self.m.actuator_ctrlrange[:N_ARM, 0], self.m.actuator_ctrlrange[:N_ARM, 1]
         self.retarget, self.ready_tcp, self.track_yaw = retarget, ready_tcp, track_yaw
         self.kin = Kinematics(self.m)
+        # hide_fingers: 手首画像だけ、ハンドと指の見た目(group 2)を透明にする(DROID と違う指を見せない)
+        self.hide_ids = [g for g in range(self.m.ngeom) if self.m.geom_group[g] == 2 and any(
+            k in self.m.body(self.m.geom_bodyid[g]).name for k in ("hand", "finger"))] if hide_fingers else []
         self.renderer = mujoco.Renderer(self.m, IMG, IMG)
         self.reset()
 
@@ -58,7 +61,11 @@ class DroidStyleEnv:
         return self.obs("")
 
     def _render(self, cam):
+        hide = self.hide_ids if cam == "wrist" else []
+        alpha = self.m.geom_rgba[hide, 3].copy()
+        self.m.geom_rgba[hide, 3] = 0.0     # 透明な geom は描画されない
         self.renderer.update_scene(self.d, camera=cam)
+        self.m.geom_rgba[hide, 3] = alpha
         return self.renderer.render().copy()
 
     def gripper_position(self):

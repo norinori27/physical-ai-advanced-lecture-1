@@ -51,7 +51,7 @@ cache = modal.Volume.from_name("openpi-cache", create_if_missing=True)
 # L4 が空かないときは、順に L40S、A100 40GB を試す(推論は 8 GB 超で足りる)。
 @app.function(gpu=["L4", "L40S", "A100-40GB"], timeout=3600, volumes={CACHE: cache})
 def run(prompt: str, steps: int, horizon: int, delta_scale: float, episodes: int,
-        retarget: bool = False, track_yaw: bool = True) -> list[dict]:
+        retarget: bool = False, track_yaw: bool = True, hide_fingers: bool = False) -> list[dict]:
     import subprocess
     import time
 
@@ -74,7 +74,8 @@ def run(prompt: str, steps: int, horizon: int, delta_scale: float, episodes: int
     print(f"server ready in {time.time() - t0:.0f}s")
     cache.commit()
 
-    extra = (["--retarget"] if retarget else []) + ([] if track_yaw else ["--no-track-yaw"])
+    extra = ((["--retarget"] if retarget else []) + ([] if track_yaw else ["--no-track-yaw"])
+             + (["--hide-fingers"] if hide_fingers else []))
     results = []
     try:
         for i in range(episodes):
@@ -93,8 +94,8 @@ def run(prompt: str, steps: int, horizon: int, delta_scale: float, episodes: int
 @app.local_entrypoint()
 def main(prompt: str = "pick up the orange cube", steps: int = 150, horizon: int = 8,
          delta_scale: float = 0.2, episodes: int = 1, name: str = "zs",
-         retarget: bool = False, track_yaw: bool = True):
-    results = run.remote(prompt, steps, horizon, delta_scale, episodes, retarget, track_yaw)
+         retarget: bool = False, track_yaw: bool = True, hide_fingers: bool = False):
+    results = run.remote(prompt, steps, horizon, delta_scale, episodes, retarget, track_yaw, hide_fingers)
     out_dir = ROOT / "outputs" / "zeroshot"
     out_dir.mkdir(parents=True, exist_ok=True)
     for i, res in enumerate(results):

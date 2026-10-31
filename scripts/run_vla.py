@@ -26,6 +26,7 @@ ap.add_argument("--delta-scale", type=float, default=0.2)
 ap.add_argument("--fake", choices=["zero", "random"])
 ap.add_argument("--retarget", action="store_true")
 ap.add_argument("--no-track-yaw", action="store_true", help="--retarget 時、Franka 側のヨーを追わない")
+ap.add_argument("--hide-fingers", action="store_true", help="手首画像からハンドと指を消す")
 ap.add_argument("--box-xy", type=float, nargs=2, default=None)
 ap.add_argument("--ready-tcp", type=float, nargs=3, default=None)
 ap.add_argument("--seed", type=int, default=0)
@@ -39,7 +40,7 @@ else:
     box_xy = tuple(args.box_xy or (0.18, -0.36))
     ready_tcp = tuple(args.ready_tcp) if args.ready_tcp else None
 env = DroidStyleEnv(box_xy=box_xy, delta_scale=args.delta_scale, retarget=args.retarget,
-                    ready_tcp=ready_tcp, track_yaw=not args.no_track_yaw)
+                    ready_tcp=ready_tcp, track_yaw=not args.no_track_yaw, hide_fingers=args.hide_fingers)
 rng = np.random.default_rng(args.seed)
 if args.fake:
     policy = None
