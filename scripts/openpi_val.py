@@ -27,6 +27,7 @@ def main():
     import jax
     import jax.numpy as jnp
     import numpy as np
+    from flax import nnx
     from openpi.models import model as _model
     from openpi.shared import download
     from openpi.training import data_loader as _data_loader
@@ -58,19 +59,29 @@ def main():
         # 微調整前の重みには LoRA の項が無いので、LoRA なしの構造(公式の pi05_droid と同じ)で読み込む
         model_cfg = cfg.model if key != "base" else type(cfg.model)(pi05=True, action_dim=32, action_horizon=16)
         model = model_cfg.load(params)
-        loss_fn = jax.jit(lambda o, a, r: model.compute_loss(r, o, a, train=False))
-        sample_fn = jax.jit(lambda o, n, r: model.sample_actions(r, o, noise=n))
+        # 重みは jit の引数として渡す(クロージャで参照すると、重み全体が定数として埋め込まれて GPU のメモリが足りなくなる)。
+        # openpi の nnx_utils.module_jit と同じ split / merge の形。train=False は Python の値のまま固定する。
+        graphdef, state = nnx.split(model)
+
+        @jax.jit
+        def loss_fn(state, o, a, r):
+            return nnx.merge(graphdef, state).compute_loss(r, o, a, train=False)
+
+        @jax.jit
+        def sample_fn(state, o, n, r):
+            return nnx.merge(graphdef, state).sample_actions(r, o, noise=n)
+
         losses, mses = [], []
         for i, (obs, act) in enumerate(batches):
             rng = jax.random.key(1000 + i)
-            losses.append(float(jnp.mean(loss_fn(obs, act, rng))))
+            losses.append(float(jnp.mean(loss_fn(state, obs, act, rng))))
             noise = jax.random.normal(jax.random.key(2000 + i), act.shape)
-            pred = sample_fn(obs, noise, rng)
+            pred = sample_fn(state, obs, noise, rng)
             mses.append(float(jnp.mean(jnp.square(pred[:, :8, :8] - act[:, :8, :8]))))
         results[key] = {"loss": float(np.mean(losses)), "act_mse": float(np.mean(mses))}
         print(key, results[key], flush=True)
         out_path.write_text(json.dumps(results, indent=1))
-        del model, params
+        del model, params, state, loss_fn, sample_fn
 
 
 if __name__ == "__main__":
