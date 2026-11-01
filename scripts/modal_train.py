@@ -54,7 +54,8 @@ VOLS = {"/cache": cache, "/data": data, "/ckpt": ckpt}
 UV = ["uv", "run", "--no-sync", "--project", "/openpi", "python"]
 
 
-LEROBOT_TARS = ("/data/lerobot_tar/openarm_place.tar", "/data/lerobot_tar/openarm_place_val.tar")
+LEROBOT_TARS = ("/data/lerobot_tar/openarm_place.tar", "/data/lerobot_tar/openarm_place_val.tar",
+                "/data/lerobot_tar/openarm_place_dagger1.tar")
 
 
 def _extract_datasets():
@@ -98,12 +99,13 @@ def convert(which: str = "both"):
     import os
     import tarfile
     os.makedirs("/data/lerobot_tar", exist_ok=True)
-    jobs = (("/data/npz/demos", "local/openarm_place", "train", LEROBOT_TARS[0]),
-            ("/data/npz/demos_val", "local/openarm_place_val", "val", LEROBOT_TARS[1]))
+    jobs = ((["/data/npz/demos"], "local/openarm_place", "train", LEROBOT_TARS[0]),
+            (["/data/npz/demos_val"], "local/openarm_place_val", "val", LEROBOT_TARS[1]),
+            (["/data/npz/demos", "/data/npz/demos_dagger1"], "local/openarm_place_dagger1", "dagger1", LEROBOT_TARS[2]))
     for src, repo, name, tar in jobs:
-        if which != "both" and which != name:
+        if which != name and not (which == "both" and name in ("train", "val")):
             continue
-        _run(UV + [f"{PROJECT}/scripts/convert_lerobot.py", "--src", src, "--repo-id", repo,
+        _run(UV + [f"{PROJECT}/scripts/convert_lerobot.py", "--src", *src, "--repo-id", repo,
                    "--stats-out", f"/data/stats_{name}.json"])
         with tarfile.open(tar + ".tmp", "w") as tf:
             tf.add(f"/tmp/lerobot/{repo}", arcname=repo.split("/")[1])
@@ -114,7 +116,8 @@ def convert(which: str = "both"):
 
 
 @app.function(volumes=VOLS, gpu=["H100", "A100-80GB"], cpu=16, memory=65536, timeout=24 * 3600)
-def train(exp: str, steps: int, smoke: bool = False, resume: bool = False, overwrite: bool = False, repo: str = ""):
+def train(exp: str, steps: int, smoke: bool = False, resume: bool = False, overwrite: bool = False, repo: str = "",
+          init_params: str = ""):
     import os
     os.makedirs("/ckpt/logs", exist_ok=True)
     _extract_datasets()
@@ -123,6 +126,7 @@ def train(exp: str, steps: int, smoke: bool = False, resume: bool = False, overw
     cmd += ["--resume"] if resume else []
     cmd += ["--overwrite"] if overwrite else []
     cmd += ["--repo-id", repo] if repo else []
+    cmd += ["--init-params", init_params] if init_params else []
     _run(cmd, log=f"/ckpt/logs/{exp}.log")
     ckpt.commit()
 
@@ -184,6 +188,52 @@ def evaluate(tag: str, exp: str = "", step: int = 0, base: bool = False, conditi
     finally:
         server.terminate()
         ckpt.commit()
+
+
+@app.function(volumes=VOLS, cpu=8, memory=32768, timeout=2 * 3600)
+def dagger_relabel(tags: str, out: str = "/data/npz/demos_dagger1"):
+    """DAgger: モデルを動かした記録(eval/<tag>)に、状態から決める教師の行動を正解として付ける(scripts/dagger.py)。"""
+    _run(["python", "scripts/dagger.py", "relabel", "--src", *[f"/ckpt/eval/{t}" for t in tags.split(",")],
+          "--out", out, "--workers", "8"], log="/ckpt/logs/dagger_relabel.log")
+    data.commit()
+    ckpt.commit()
+
+
+@app.function(volumes=VOLS, cpu=2, timeout=24 * 3600)
+def dagger_pipeline(tags: str, exp: str, steps: int, init_exp: str, init_step: int, seeds: int = 10):
+    """正解付け → 変換 → 学習(init の重みから続ける)→ 評価(厳しい定義)を続けて行う。端末を閉じても進むよう、全部を Modal の中で呼ぶ。"""
+    import json
+    import pathlib
+    print("1/4 relabel", flush=True)
+    dagger_relabel.remote(tags)
+    print("2/4 convert", flush=True)
+    convert.remote("dagger1")
+    print("3/4 train", flush=True)
+    init = f"/ckpt/checkpoints/openarm_pi05_lora/{init_exp}/{init_step}/params"
+    train.remote(exp, steps, repo="local/openarm_place_dagger1", init_params=init)
+    print("4/4 eval(6 条件を別々の GPU で)", flush=True)
+    import shutil
+    last = steps - 1
+    tag = f"{exp}_s{last}_strict"
+    conds = ("base", "pos_outer", "goal_color", "light", "box_color", "language")
+    calls = [evaluate.spawn(f"{tag}_{c}", exp=exp, step=last, conditions=c, seeds=seeds, release_cm=5.0, post_steps=15)
+             for c in conds]
+    for c in calls:
+        c.get()
+    ckpt.reload()
+    # 1 つのフォルダにまとめる(同じ results.jsonl に複数のコンテナから書くと、後に保存した方で上書きされるため分けた)
+    out = pathlib.Path(f"/ckpt/eval/{tag}")
+    out.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for c in conds:
+        part = pathlib.Path(f"/ckpt/eval/{tag}_{c}")
+        rows += [json.loads(x) for x in (part / "results.jsonl").read_text().splitlines() if x.strip()]
+        for f in part.iterdir():
+            if f.name != "results.jsonl":
+                shutil.copy(f, out / f.name)
+    (out / "results.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    ckpt.commit()
+    print(f"done: {sum(r['strict']['success'] for r in rows)}/{len(rows)} (strict, eval 内の判定)", flush=True)
 
 
 @app.function(volumes=VOLS, gpu=["L40S", "A100-40GB", "A100-80GB"], timeout=4 * 3600)
@@ -267,6 +317,12 @@ def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, see
         print("spawned:", [c.object_id for c in calls], flush=True)
         for c in calls:
             c.get()
+    elif action == "dagger_pipeline":
+        # 例: --tag dagger1 --parts 6 --exp run2_dagger --steps 5000   (run1 の 14999 から続ける)
+        tags = ",".join(f"{tag or 'dagger1'}_p{i}" for i in range(parts))
+        call = dagger_pipeline.spawn(tags, exp, steps, init_exp="run1", init_step=step or 14999, seeds=seeds)
+        print("spawned:", call.object_id, "(--detach で実行すれば、端末を閉じても続く)", flush=True)
+        call.get()
     elif action == "eval_base":
         call = evaluate.spawn(tag or "base", base=True, conditions=conditions, seeds=seeds, max_steps=max_steps)
         print("spawned:", call.object_id, flush=True)

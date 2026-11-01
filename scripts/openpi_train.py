@@ -25,10 +25,12 @@ def main():
     ap.add_argument("--overwrite", action="store_true")
     ap.add_argument("--smoke", action="store_true")
     ap.add_argument("--repo-id", default=None, help="学習に使う LeRobot データセット(既定は openpi_cfg.REPO_ID)")
+    ap.add_argument("--init-params", default="", help="学習を始める重み(例: /ckpt/checkpoints/openarm_pi05_lora/run1/14999/params)")
     args = ap.parse_args()
     steps, save = (200, 100) if args.smoke else (args.steps, args.save_interval)
     cfg = openpi_cfg.make_config(args.exp_name, num_train_steps=steps, batch_size=args.batch_size, save_interval=save,
-                                 warmup_steps=min(500, steps // 10), num_workers=args.num_workers, **({"repo_id": args.repo_id} if args.repo_id else {}))
+                                 warmup_steps=min(500, steps // 10), num_workers=args.num_workers, init_params=args.init_params,
+                                 **({"repo_id": args.repo_id} if args.repo_id else {}))
     cfg = dataclasses.replace(cfg, resume=args.resume, overwrite=args.overwrite)
     print(cfg, flush=True)
     openpi_train.main(cfg)

@@ -19,7 +19,7 @@ import numpy as np
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--src", required=True)
+    ap.add_argument("--src", required=True, nargs="+", help="npz のフォルダ(複数可。DAgger では元のデモ + 正解を付けた記録)")
     ap.add_argument("--repo-id", required=True)
     ap.add_argument("--stats-out", default=None)
     args = ap.parse_args()
@@ -38,7 +38,7 @@ def main():
                   "actions": {"dtype": "float32", "shape": (8,), "names": ["actions"]}},
         image_writer_threads=10, image_writer_processes=5)
 
-    files = sorted(glob.glob(os.path.join(args.src, "ep_*.npz")))
+    files = sorted(f for src in args.src for f in glob.glob(os.path.join(src, "ep_*.npz")))
     black = np.zeros((180, 320, 3), np.uint8)
     states, actions, prompts = [], [], {}
     for i, f in enumerate(files):

@@ -29,7 +29,8 @@ def model_config():
 def make_config(exp_name: str, num_train_steps: int = 15_000, batch_size: int = 32, save_interval: int = 1000,
                 warmup_steps: int = 500, peak_lr: float = 5e-5, repo_id: str = REPO_ID,
                 checkpoint_base_dir: str = "/ckpt/checkpoints", assets_base_dir: str = "/ckpt/assets",
-                num_workers: int = 4, seed: int = 42) -> _config.TrainConfig:
+                num_workers: int = 4, seed: int = 42, init_params: str = "") -> _config.TrainConfig:
+    """init_params: 学習を始める重み(既定は pi05_droid)。DAgger では run1 の重みから続ける(LoRA の重みも引き継がれる)。"""
     return _config.TrainConfig(
         name=NAME,
         exp_name=exp_name,
@@ -39,7 +40,7 @@ def make_config(exp_name: str, num_train_steps: int = 15_000, batch_size: int = 
             base_config=_config.DataConfig(prompt_from_task=True),
             assets=_config.AssetsConfig(assets_dir=f"{PI05_DROID}/assets", asset_id="droid"),
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader(f"{PI05_DROID}/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader(init_params or f"{PI05_DROID}/params"),
         freeze_filter=model_config().get_freeze_filter(),
         ema_decay=None,
         lr_schedule=_optimizer.CosineDecaySchedule(warmup_steps=warmup_steps, peak_lr=peak_lr,
