@@ -50,7 +50,8 @@ def main():
     num_batches = args.num_batches
     if num_batches <= 0:     # 検証データの全フレーム分(drop_last なので端数のバッチは除く)
         val_cfg = openpi_cfg.with_repo(base_cfg, openpi_cfg.VAL_REPO_ID)
-        num_batches = len(_data_loader.create_data_loader(val_cfg, shuffle=False, num_batches=1).torch_loader)
+        # create_data_loader は DataLoaderImpl で包んで返すので、中の TorchDataLoader の torch_loader を見る
+        num_batches = len(_data_loader.create_data_loader(val_cfg, shuffle=False, num_batches=1)._data_loader.torch_loader)
     n_frames = num_batches * args.batch_size
     print(f"{args.split}: {num_batches} batches x {args.batch_size} = {n_frames} frames", flush=True)
 
