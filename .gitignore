@@ -17,3 +17,6 @@ PLAN_VLA.md
 /Dockerfile
 /docker-compose.yml
 third_party/
+
+# レポートと動画の構成のドラフト(文書なので入れない)
+report/
