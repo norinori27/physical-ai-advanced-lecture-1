@@ -46,7 +46,9 @@ def classify(env, task, lifted, events):
     return "dropped" if events.get("dropped_far") else "misplaced"
 
 
-def run(policy_infer, task, max_steps, horizon, record_images=True):
+def run(policy_infer, task, max_steps, horizon, record_images=True, post_steps=0):
+    """post_steps > 0: 成功と判定した後も、その本数だけ方策を動かし続ける(放した後に手を上げるところまで撮るため)。
+    結果(outcome、dist_to_target など)は、これまでと同じく成功と判定した時点の値。後の様子は summary["post"] に入れる。"""
     import mujoco
     from openarm_anomaly.task import apply_task, place_success
     from openarm_anomaly.vla_env import DroidStyleEnv
@@ -66,8 +68,11 @@ def run(policy_infer, task, max_steps, horizon, record_images=True):
     chunks, chunk_t, infer_ms = [], [], []
     pending = np.zeros((0, 8))
     lifted, events, success_run = False, {}, 0
+    at_success, end_t = None, max_steps
     obs = env.obs(task.prompt)
     for t in range(max_steps):
+        if t >= end_t:
+            break
         if len(pending) == 0:
             req = dict(obs)
             req["observation/exterior_image_1_left"] = pad224(obs["observation/exterior_image_1_left"])
@@ -100,17 +105,32 @@ def run(policy_infer, task, max_steps, horizon, record_images=True):
             events.setdefault("dropped_far", True)
         obs = env.obs(task.prompt)
         success_run = success_run + 1 if place_success(env, task) else 0
-        if success_run >= 8:          # 置いて放した状態が 8 ステップ続いたら終了
-            break
-    outcome = classify(env, task, lifted, events)
-    box = env.box_pos()
+        if at_success is None and success_run >= 8:     # 置いて放した状態が 8 ステップ続いたら成功(ここで判定する)
+            at_success = {"t": t + 1, "box": env.box_pos().copy(), "outcome": classify(env, task, lifted, events)}
+            end_t = t + 1 + post_steps
+    post = None
+    if at_success is not None:
+        outcome, box = at_success["outcome"], at_success["box"]
+        if post_steps > 0:      # 成功の後の様子: 箱が動いていないか、手が離れたか
+            box_end = env.box_pos()
+            tcp_end = env.kin.fk(d.qpos[:7])[0]
+            post = {"steps": int(len(rec["action"]) - at_success["t"]), "still_on_target": bool(place_success(env, task)),
+                    "box_moved_cm": float(np.linalg.norm(box_end - box) * 100),
+                    "tcp_above_box_cm": float((tcp_end[2] - box_end[2]) * 100),
+                    "pad_contact_end": int(rec["pad_contact"][-1]), "gripper_end": float(env.gripper_position())}
+        t = at_success["t"] - 1
+    else:
+        outcome = classify(env, task, lifted, events)
+        box = env.box_pos()
     env.close()
     rec = {k: np.asarray(v) for k, v in rec.items() if len(v)}
     rec["chunks"], rec["chunk_t"] = np.asarray(chunks), np.asarray(chunk_t)
     summary = {"outcome": outcome, "success": outcome == "success", "steps": t + 1, "lifted": lifted,
                "box_final": box.tolist(), "dist_to_target": float(np.hypot(box[0] - task.target_xy[0], box[1] - task.target_xy[1])),
                "infer_ms_mean": float(np.mean(infer_ms)), "n_infer": len(chunks),
-               "reach_err_box": reach["box"], "reach_err_goal": reach["goal"]}
+               "reach_err_box": reach["box"], "reach_err_goal": reach["goal"], "n_frames": len(rec["action"])}
+    if post is not None:
+        summary["post"] = post
     return summary, rec
 
 
@@ -127,6 +147,8 @@ def main():
     ap.add_argument("--max-steps", type=int, default=450)
     ap.add_argument("--horizon", type=int, default=8)
     ap.add_argument("--out", default="outputs/eval")
+    ap.add_argument("--post-steps", type=int, default=0, help="成功の後も動かし続けるステップ数(動画用。判定は成功時点)")
+    ap.add_argument("--only", nargs="*", default=None, help="この試行だけ(例: base:500001 goal_color:500004)")
     ap.add_argument("--fake", choices=["zero"])
     args = ap.parse_args()
 
@@ -141,6 +163,7 @@ def main():
     import mediapy
     out_dir = os.path.join(args.out, args.tag)
     os.makedirs(out_dir, exist_ok=True)
+    only = {(x.split(":")[0], int(x.split(":")[1])) for x in args.only} if args.only else None
     res_path = os.path.join(out_dir, "results.jsonl")
     done = set()
     if os.path.exists(res_path):     # 途中で止まったときは、済んだエピソードを飛ばして続きから
@@ -149,11 +172,13 @@ def main():
     for cond in args.conditions:
         for i in range(args.seeds):
             seed = args.seed0 + i     # 条件ごとに同じ seed 列(条件間で配置の乱数を揃える)
+            if only is not None and (cond, seed) not in only:
+                continue
             if (cond, seed) in done:
                 print(f"{cond}_s{seed}: done, skip", flush=True)
                 continue
             task = sample_task(np.random.default_rng(seed), cond, seed)
-            summary, rec = run(policy_infer, task, args.max_steps, args.horizon)
+            summary, rec = run(policy_infer, task, args.max_steps, args.horizon, post_steps=args.post_steps)
             name = f"{cond}_s{seed}"
             np.savez_compressed(os.path.join(out_dir, name + ".npz"), task_json=json.dumps(task.to_dict()), **rec)
             mediapy.write_video(os.path.join(out_dir, name + ".mp4"), np.concatenate([rec["ext"], rec["wrist"]], 2), fps=15)
