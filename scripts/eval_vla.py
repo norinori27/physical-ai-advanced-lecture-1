@@ -54,6 +54,11 @@ def run(policy_infer, task, max_steps, horizon, record_images=True):
     env = DroidStyleEnv(box_xy=task.box_xy, retarget=True, ready_tcp=task.ready_tcp, track_yaw=True, markers=True)
     apply_task(env, task)
     m, d = env.m, env.d
+    # 箱とゴールの真上で、真下向きのハンドが届くか(位置の誤差 m)。外側の条件では腕の届く端になり、届かないことがある
+    reach = {}
+    for name, xy in (("box", task.box_xy), ("goal", task.target_xy)):
+        _, err = env.kin.solve_global(np.array([*xy, env.box_half]), n_starts=10)
+        reach[name] = float(err)
     box_gid = m.geom("box_geom").id
     pads = {m.geom("openarm_left_finger_pad").id, m.geom("openarm_right_finger_pad").id}
     rec = {k: [] for k in ["ext", "wrist", "joint_position", "gripper_position", "action", "tcp", "box_pos", "box_quat",
@@ -104,7 +109,8 @@ def run(policy_infer, task, max_steps, horizon, record_images=True):
     rec["chunks"], rec["chunk_t"] = np.asarray(chunks), np.asarray(chunk_t)
     summary = {"outcome": outcome, "success": outcome == "success", "steps": t + 1, "lifted": lifted,
                "box_final": box.tolist(), "dist_to_target": float(np.hypot(box[0] - task.target_xy[0], box[1] - task.target_xy[1])),
-               "infer_ms_mean": float(np.mean(infer_ms)), "n_infer": len(chunks)}
+               "infer_ms_mean": float(np.mean(infer_ms)), "n_infer": len(chunks),
+               "reach_err_box": reach["box"], "reach_err_goal": reach["goal"]}
     return summary, rec
 
 
@@ -135,16 +141,24 @@ def main():
     import mediapy
     out_dir = os.path.join(args.out, args.tag)
     os.makedirs(out_dir, exist_ok=True)
+    res_path = os.path.join(out_dir, "results.jsonl")
+    done = set()
+    if os.path.exists(res_path):     # 途中で止まったときは、済んだエピソードを飛ばして続きから
+        with open(res_path) as f:
+            done = {(r["condition"], r["seed"]) for r in (json.loads(x) for x in f if x.strip())}
     for cond in args.conditions:
         for i in range(args.seeds):
             seed = args.seed0 + i     # 条件ごとに同じ seed 列(条件間で配置の乱数を揃える)
+            if (cond, seed) in done:
+                print(f"{cond}_s{seed}: done, skip", flush=True)
+                continue
             task = sample_task(np.random.default_rng(seed), cond, seed)
             summary, rec = run(policy_infer, task, args.max_steps, args.horizon)
             name = f"{cond}_s{seed}"
             np.savez_compressed(os.path.join(out_dir, name + ".npz"), task_json=json.dumps(task.to_dict()), **rec)
             mediapy.write_video(os.path.join(out_dir, name + ".mp4"), np.concatenate([rec["ext"], rec["wrist"]], 2), fps=15)
             line = {"tag": args.tag, "condition": cond, "seed": seed, "task": task.to_dict(), **summary}
-            with open(os.path.join(out_dir, "results.jsonl"), "a") as f:
+            with open(res_path, "a") as f:
                 f.write(json.dumps(line) + "\n")
             print(f"{name}: {summary['outcome']} steps {summary['steps']} dist {summary['dist_to_target']:.3f} "
                   f"prompt '{task.prompt}'", flush=True)

@@ -51,7 +51,12 @@ class DroidStyleEnv:
         self.reset()
 
     def reset(self):
-        reset_to_ready(self.m, self.d, self.box_half, self.box_xy)
+        if self.ready_tcp is None:
+            reset_to_ready(self.m, self.d, self.box_half, self.box_xy)
+        else:
+            # 開始姿勢は下で ready_tcp から決め直すので、箱の上空の姿勢(reset_to_ready)は解かない。
+            # 箱が腕の届く端にあると上空の姿勢が解けず止まっていた(評価の pos_outer)。結果は以前と同じ
+            mujoco.mj_resetDataKeyframe(self.m, self.d, 0)
         if self.ready_tcp is not None:
             q, err = self.kin.solve_global(np.asarray(self.ready_tcp, float))
             assert err < 5e-3, f"ready_tcp unreachable: err={err:.3f}"
