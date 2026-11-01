@@ -55,7 +55,7 @@ UV = ["uv", "run", "--no-sync", "--project", "/openpi", "python"]
 
 
 LEROBOT_TARS = ("/data/lerobot_tar/openarm_place.tar", "/data/lerobot_tar/openarm_place_val.tar",
-                "/data/lerobot_tar/openarm_place_dagger1.tar")
+                "/data/lerobot_tar/openarm_place_dagger1.tar", "/data/lerobot_tar/openarm_place_dagger1only.tar")
 
 
 def _extract_datasets():
@@ -101,7 +101,8 @@ def convert(which: str = "both"):
     os.makedirs("/data/lerobot_tar", exist_ok=True)
     jobs = ((["/data/npz/demos"], "local/openarm_place", "train", LEROBOT_TARS[0]),
             (["/data/npz/demos_val"], "local/openarm_place_val", "val", LEROBOT_TARS[1]),
-            (["/data/npz/demos", "/data/npz/demos_dagger1"], "local/openarm_place_dagger1", "dagger1", LEROBOT_TARS[2]))
+            (["/data/npz/demos", "/data/npz/demos_dagger1"], "local/openarm_place_dagger1", "dagger1", LEROBOT_TARS[2]),
+            (["/data/npz/demos_dagger1"], "local/openarm_place_dagger1only", "dagger1only", LEROBOT_TARS[3]))
     for src, repo, name, tar in jobs:
         if which != name and not (which == "both" and name in ("train", "val")):
             continue
@@ -200,17 +201,18 @@ def dagger_relabel(tags: str, out: str = "/data/npz/demos_dagger1"):
 
 
 @app.function(volumes=VOLS, cpu=2, timeout=24 * 3600)
-def dagger_pipeline(tags: str, exp: str, steps: int, init_exp: str, init_step: int, seeds: int = 10):
+def dagger_pipeline(tags: str, exp: str, steps: int, init_exp: str, init_step: int, seeds: int = 10, dagger_only: bool = False):
     """正解付け → 変換 → 学習(init の重みから続ける)→ 評価(厳しい定義)を続けて行う。端末を閉じても進むよう、全部を Modal の中で呼ぶ。"""
     import json
     import pathlib
     print("1/4 relabel", flush=True)
     dagger_relabel.remote(tags)
     print("2/4 convert", flush=True)
-    convert.remote("dagger1")
+    name = "dagger1only" if dagger_only else "dagger1"     # 正解を付けた記録だけ / 元の 240 本 + 記録
+    convert.remote(name)
     print("3/4 train", flush=True)
     init = f"/ckpt/checkpoints/openarm_pi05_lora/{init_exp}/{init_step}/params"
-    train.remote(exp, steps, repo="local/openarm_place_dagger1", init_params=init)
+    train.remote(exp, steps, repo=f"local/openarm_place_{name}", init_params=init)
     print("4/4 eval(6 条件を別々の GPU で)", flush=True)
     import shutil
     last = steps - 1
@@ -266,7 +268,8 @@ def param_delta(exp: str, step: int):
 def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, seeds: int = 5, conditions: str = "",
          tag: str = "", val_steps: str = "", resume: bool = False, overwrite: bool = False, max_steps: int = 450,
          episodes_tag: str = "", what: str = "", split: str = "val", post_steps: int = 0, only: str = "",
-         release_cm: float = 0.0, per_condition: int = 2, max_episodes: int = 6, parts: int = 6, seed0: int = 700000):
+         release_cm: float = 0.0, per_condition: int = 2, max_episodes: int = 6, parts: int = 6, seed0: int = 700000,
+         dagger_only: bool = False):
     if action == "upload":
         with data.batch_upload(force=True) as b:
             b.put_directory(str(ROOT / "data" / "demos"), "/npz/demos")
@@ -320,7 +323,8 @@ def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, see
     elif action == "dagger_pipeline":
         # 例: --tag dagger1 --parts 6 --exp run2_dagger --steps 5000   (run1 の 14999 から続ける)
         tags = ",".join(f"{tag or 'dagger1'}_p{i}" for i in range(parts))
-        call = dagger_pipeline.spawn(tags, exp, steps, init_exp="run1", init_step=step or 14999, seeds=seeds)
+        call = dagger_pipeline.spawn(tags, exp, steps, init_exp="run1", init_step=step or 14999, seeds=seeds,
+                                     dagger_only=dagger_only)
         print("spawned:", call.object_id, "(--detach で実行すれば、端末を閉じても続く)", flush=True)
         call.get()
     elif action == "eval_base":

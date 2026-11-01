@@ -15,6 +15,7 @@ gen_demos.py の教師は段階を順に進むので、途中の状態からは�
     --perturb: 運搬中に実行だけをゴールから 3〜8 cm ずらした点へ向け(正解のラベルは付けない)、直せるかを見る
   正解を付ける: python scripts/dagger.py relabel --src outputs/eval_npz/dagger1 --out data/demos_dagger1
     評価の npz(eval_vla.py)から、gen_demos.py と同じ形の ep_<seed>.npz を作る(画像と状態はモデルが見たもの、行動は教師)
+    同じ配置で教師だけを動かして失敗する記録は除く
 """
 import argparse
 import glob
@@ -176,6 +177,11 @@ def check_one(job):
 
 def relabel_one(job):
     path, out = job
+    # 同じ配置で教師だけを動かして失敗する記録(腕が届かない配置など)は使わない。教師の正解が「届かない方向へ押し続ける」になるため
+    seed = int(os.path.basename(path).rsplit("_s", 1)[1][:-4])
+    chk = check_one((seed, False, 450))
+    if not chk["success"]:
+        return {"file": os.path.basename(path), "skipped": "teacher fails on this layout", "teacher_phases": chk["phases"]}
     from openarm_anomaly.franka_retarget import franka_fk
     from openarm_anomaly.vla_env import DroidStyleEnv
     z = np.load(path)
@@ -197,7 +203,6 @@ def relabel_one(job):
         acts.append(a)
         names.append(name)
     env.close()
-    seed = int(os.path.basename(path).rsplit("_s", 1)[1][:-4])
     np.savez_compressed(os.path.join(out, f"ep_{seed:06d}.npz"),
                         exterior_image_1_left=z["ext"], wrist_image_left=z["wrist"],
                         joint_position=q_f.astype(np.float32), gripper_position=grip.astype(np.float32)[:, None],
@@ -228,9 +233,12 @@ def main():
         else:
             os.makedirs(args.out, exist_ok=True)
             files = sorted(f for d in args.src for f in glob.glob(os.path.join(d, "*.npz")))
+            res = []
             for r in pool.imap_unordered(relabel_one, [(f, args.out) for f in files]):
                 print(r, flush=True)
-            print(f"saved {len(files)} episodes to {args.out}")
+                res.append(r)
+            n_skip = sum("skipped" in r for r in res)
+            print(f"saved {len(files) - n_skip} episodes to {args.out} (skipped {n_skip}: teacher fails on the layout)")
 
 
 if __name__ == "__main__":
