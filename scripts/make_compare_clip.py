@@ -41,15 +41,8 @@ def result(root, tag, cond, seed):
     return None
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--condition", required=True)
-    ap.add_argument("--seed", type=int, required=True)
-    ap.add_argument("--caption", default="")
-    ap.add_argument("--root", default="outputs/eval")
-    ap.add_argument("--out", default=None)
-    args = ap.parse_args()
-    out = args.out or f"outputs/video/clips/{args.condition}_s{args.seed}.mp4"
+def make_clip(condition, seed, caption="", root="outputs/eval", out=None):
+    out = out or f"outputs/video/clips/{condition}_s{seed}.mp4"
     os.makedirs(os.path.dirname(out), exist_ok=True)
 
     cw, ch = CW * SCALE, CH * SCALE
@@ -61,7 +54,7 @@ def main():
     prompt = None
     cols, limits = [], []     # 成功した列は、手を上げた時点から TAIL フレームで止める(その後また手を下ろすことがある)
     for ci, (title, tag) in enumerate(COLUMNS):
-        r = result(args.root, tag, args.condition, args.seed)
+        r = result(root, tag, condition, seed)
         x = ci * (cw + GAP)
         d.text((x + 10, CAP_H + 2), title, font=ImageFont.truetype(FONT_B, 18), fill=MUTED)
         if r is None:
@@ -71,11 +64,11 @@ def main():
             ok = r["success"]
             txt = f"{'SUCCESS' if ok else OUTCOME.get(r['outcome'], r['outcome'].replace('_', ' '))}  ({r['dist_to_target'] * 100:.1f} cm from goal)"
             d.text((x + 10, CAP_H + 22), txt, font=ImageFont.truetype(FONT_B, 15), fill=OK if ok else NG)
-        path = os.path.join(args.root, tag, f"{args.condition}_s{args.seed}.mp4")
+        path = os.path.join(root, tag, f"{condition}_s{seed}.mp4")
         cols.append(path if os.path.exists(path) else None)
         t_up = r.get("strict", {}).get("t") if r and r["success"] else None
         limits.append(t_up + TAIL if t_up else None)
-    d.text((10, 6), args.caption, font=ImageFont.truetype(FONT_B, 22), fill=INK)
+    d.text((10, 6), caption, font=ImageFont.truetype(FONT_B, 22), fill=INK)
     d.text((10, 32), f'instruction: "{prompt}"', font=ImageFont.truetype(FONT, 16), fill=MUTED)
     canvas0 = np.asarray(base).copy()
 
@@ -104,6 +97,18 @@ def main():
                         f[y:y + ch, x:x + cw] = cv2.resize(cell, (cw, ch), interpolation=cv2.INTER_LINEAR)
                 w.add_image(f)
     print(f"saved {out}: {T} frames ({T / 15:.0f} s), {W}x{H}")
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--condition", required=True)
+    ap.add_argument("--seed", type=int, required=True)
+    ap.add_argument("--caption", default="")
+    ap.add_argument("--root", default="outputs/eval")
+    ap.add_argument("--out", default=None)
+    args = ap.parse_args()
+    make_clip(args.condition, args.seed, args.caption, args.root, args.out)
 
 
 if __name__ == "__main__":
