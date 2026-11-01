@@ -80,10 +80,10 @@ def mcnemar_exact(b, c):
     return min(1.0, 2 * p)
 
 
-def load(root, tag, strict=False):
+def load(root, tag, strict=False, results="results.jsonl"):
     """strict: 厳しい定義(置いて、離して、上げる)の結果があれば、それで成功・結果・距離を置き換える。"""
     rows = {}
-    with open(os.path.join(root, tag, "results.jsonl")) as f:
+    with open(os.path.join(root, tag, results)) as f:
         for line in f:
             if line.strip():
                 r = json.loads(line)
@@ -99,11 +99,15 @@ def main():
     ap.add_argument("--tags", nargs="+", required=True)
     ap.add_argument("--root", default="outputs/eval")
     ap.add_argument("--out", default="outputs/eval/summary")
+    ap.add_argument("--results", default="results.jsonl", help="読むファイル名(例: results_rejudged.jsonl)。無いタグは results.jsonl")
     ap.add_argument("--strict", action="store_true", help="厳しい定義(置いて、離して、上げる)の結果で集計する(ある試行だけ)")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
 
-    data = {t: load(args.root, t, args.strict) for t in args.tags}
+    data = {}
+    for t in args.tags:      # 判定し直した結果(rejudge_strict.py)があれば、それを使う
+        name = args.results if os.path.exists(os.path.join(args.root, t, args.results)) else "results.jsonl"
+        data[t] = load(args.root, t, args.strict, name)
     summary, md = {}, []
     for tag, rows in data.items():
         by = defaultdict(list)
