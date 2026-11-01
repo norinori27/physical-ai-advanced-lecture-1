@@ -187,12 +187,13 @@ def evaluate(tag: str, exp: str = "", step: int = 0, base: bool = False, conditi
 
 @app.function(volumes=VOLS, gpu=["L40S", "A100-40GB", "A100-80GB"], timeout=4 * 3600)
 def analyze(tag: str, exp: str = "", step: int = 0, base: bool = False, episodes_tag: str = "", what: str = "",
-            max_episodes: int = 6, per_condition: int = 2):
+            max_episodes: int = 6, per_condition: int = 2, only: str = ""):
     cmd = UV + [f"{PROJECT}/scripts/analyze_policy.py", "--episodes", f"/ckpt/eval/{episodes_tag or tag}",
                 "--out", f"/ckpt/analysis/{tag}", "--max-episodes", str(max_episodes),
                 "--per-condition", str(per_condition)]
     cmd += ["--base"] if base else ["--exp-name", exp, "--step", str(step)]
     cmd += ["--what", *what.split(",")] if what else []
+    cmd += ["--only", *only.split(",")] if only else []
     _run(cmd, log=f"/ckpt/logs/analysis_{tag}.log")
     ckpt.commit()
 
@@ -260,14 +261,14 @@ def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, see
         print("spawned:", call.object_id, flush=True)
         call.get()
     elif action == "analyze":     # 例: --action analyze --exp run1 --step 8000 --tag run1_s8000 [--episodes-tag base]
-        # 試しに 1 本: --per-condition 0 --max-episodes 1 --what noise,camera,prompt
+        # 試しに 1 本: --only base_s500008 --what noise,camera,prompt,attention
         call = analyze.spawn(tag or f"{exp}_s{step}", exp=exp, step=step, episodes_tag=episodes_tag, what=what,
-                             max_episodes=max_episodes, per_condition=per_condition)
+                             max_episodes=max_episodes, per_condition=per_condition, only=only)
         print("spawned:", call.object_id, flush=True)
         call.get()
     elif action == "analyze_base":
         call = analyze.spawn(tag or "base", base=True, episodes_tag=episodes_tag, what=what,
-                             max_episodes=max_episodes, per_condition=per_condition)
+                             max_episodes=max_episodes, per_condition=per_condition, only=only)
         print("spawned:", call.object_id, flush=True)
         call.get()
     elif action == "param_delta":     # 例: --action param_delta --exp run1_smoke --step 199

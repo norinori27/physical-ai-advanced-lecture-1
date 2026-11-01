@@ -3,6 +3,8 @@
 推論サーバは通さず、方策を同じプロセスで読み込む(雑音を固定して入力だけを変えるため。サーバ経由だと推論ごとに雑音が変わる)。
 行動チャンクの「意味」は、実行する先頭 8 ステップを仮想 Franka に積分した手先の変位(m)と、グリッパの指令で見る。
 
+調べる時点(--frames): start 最初、pregrasp 箱に最も近づいた時、carry 箱が最も高い時、preplace 箱を机に置く 8 ステップ前
+
 分析(--what で選ぶ。既定は全部):
   noise     : 雑音だけを変えて N 回推論したときの、手先の変位のばらつき(迷っている度合い)
   camera    : 外部カメラ / 手首カメラを黒にしたときの手先の変位の変化(どちらのカメラに頼るか)
@@ -72,7 +74,8 @@ def main():
     ap.add_argument("--what", nargs="+", default=["noise", "camera", "prompt", "state", "occlusion", "attention", "lora"])
     ap.add_argument("--max-episodes", type=int, default=6, help="--per-condition が 0 のとき、ファイル名順の先頭から")
     ap.add_argument("--per-condition", type=int, default=0, help="条件ごとに seed の小さい順に何本ずつ調べるか")
-    ap.add_argument("--frames", default="start,pregrasp,carry", help="各エピソードで調べる時点")
+    ap.add_argument("--only", nargs="*", default=[], help="調べる試行の名前(例: base_s500008)。指定すると --per-condition などより優先")
+    ap.add_argument("--frames", default="start,pregrasp,carry,preplace", help="各エピソードで調べる時点")
     ap.add_argument("--n-noise", type=int, default=16)
     ap.add_argument("--grid", default="6,10", help="遮蔽の格子(縦,横)")
     args = ap.parse_args()
@@ -111,6 +114,10 @@ def main():
         out = {"start": 0, "pregrasp": int(np.argmin(np.linalg.norm(tcp[:, :2] - box[0, :2], axis=1)))}
         if box[:, 2].max() > 0.07:
             out["carry"] = int(np.argmax(box[:, 2]))
+            # preplace: 持ち上げた後、箱が初めて机に戻る直前(置く位置を決める時点)。ここで 8 ステップ前を見る
+            down = np.nonzero(box[out["carry"]:, 2] < 0.035 + 0.01)[0]
+            if len(down):
+                out["preplace"] = max(out["carry"], out["carry"] + int(down[0]) - 8)
         return {k: v for k, v in out.items() if k in args.frames.split(",")}
 
     results = {"tag": os.path.basename(args.out.rstrip("/")), "base": args.base, "exp": args.exp_name, "step": args.step,
@@ -118,7 +125,9 @@ def main():
     rng = np.random.default_rng(0)
     noise0 = np.asarray(jax.random.normal(jax.random.key(0), (H, A)))
     files = sorted(glob.glob(os.path.join(args.episodes, "*.npz")))
-    if args.per_condition > 0:     # ファイル名は <条件>_s<seed>.npz
+    if args.only:
+        files = [f for f in files if os.path.basename(f)[:-4] in args.only]
+    elif args.per_condition > 0:     # ファイル名は <条件>_s<seed>.npz
         by = {}
         for f in files:
             by.setdefault(os.path.basename(f).rsplit("_s", 1)[0], []).append(f)
