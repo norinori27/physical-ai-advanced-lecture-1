@@ -1,15 +1,13 @@
 """提出動画を組み立てる(場面の構成は report/video_plan.md)。
 
 各場面を 1936x828 の画面にそろえ、つなげて 1 本にする。説明は映像の上の英語の字幕だけ(スライドは入れない)。
-  intro : ゼロショットの初期の実験(外部 | 手首、224x224 ずつ)を 3 倍に拡大
-  clip  : make_compare_clip.py の 2x3(学習前 | 学習後 | 教師 × 外部 | 手首)
+  clip  : make_compare_clip.py の 2x3(学習前 | 学習後 | 教師 × 外部 | 手首)。学習後と教師が終わった時点で切る
   grid  : 6 条件の学習後の外部カメラを 3x2 に並べ、各マスに成功数
 --speed で再生速度を変える(フレームを間引く)。字幕に速度を書く。
 使い方: python scripts/make_video.py [--speed 1.5] [--out outputs/video/openarm_vla.mp4]
 """
 import argparse
 import contextlib
-import json
 import os
 import sys
 
@@ -25,10 +23,6 @@ W, H, FPS = 1936, 828, 15
 FT = "run1_s14999_strict"
 # (種類, 引数, 字幕)。成功数は 2 回目の評価(厳しい定義: 置いて、離して、5 cm 以上上げる)
 SCENES = [
-    ("intro", "outputs/zeroshot/zs_pick_ep0.mp4",
-     "Zero-shot pi0.5-DROID on OpenArm: Franka joint actions applied directly to OpenArm joints"),
-    ("intro", "outputs/zeroshot/zs_rt_pick_ep0.mp4",
-     "Zero-shot, retargeted through a virtual Franka: reaches the cube, but does not close the gripper"),
     ("clip", ("base", 500002), "Same scene, trained-range layout: fine-tuned 4/10, teacher 7/10 (zero-shot 0/5)"),
     ("clip", ("base", 500003), "Typical failure: the cube is carried to the goal but placed off the marker"),
     ("clip", ("goal_color", 500002), "Unseen goal color (yellow): fine-tuned 2/10, teacher 8/10"),
@@ -55,29 +49,8 @@ def text_canvas(caption, sub="", speed=1.0):
     return img, d
 
 
-def intro_frames(path, caption, speed):
-    prompt = None
-    meta = path.replace(".mp4", ".json")
-    if os.path.exists(meta):
-        prompt = json.load(open(meta)).get("args", {}).get("prompt")
-    img, _ = text_canvas(caption, f'instruction: "{prompt}"' if prompt else "", speed)
-    canvas0 = np.asarray(img).copy()
-    s = 3
-    with mediapy.VideoReader(path) as rd:
-        hh, ww = rd.shape
-        cw = ww // 2
-        x0 = (W - 2 * cw * s - 8) // 2
-        for fr in rd:
-            f = canvas0.copy()
-            for i in range(2):
-                cell = cv2.resize(fr[:, i * cw:(i + 1) * cw], (cw * s, hh * s), interpolation=cv2.INTER_LINEAR)
-                x = x0 + i * (cw * s + 8)
-                f[100:100 + hh * s, x:x + cw * s] = cell
-            yield f
-
-
 def clip_frames(cond, seed, caption, speed):
-    path = make_clip(cond, seed, caption, out=f"outputs/video/clips/{cond}_s{seed}.mp4")
+    path = make_clip(cond, seed, caption, out=f"outputs/video/clips/{cond}_s{seed}.mp4", follow=(1, 2))
     with mediapy.VideoReader(path) as rd:
         for fr in rd:
             if speed != 1.0:
@@ -123,8 +96,7 @@ def main():
     total = 0
     with mediapy.VideoWriter(args.out, shape=(H, W), fps=FPS) as w:
         for kind, arg, caption in SCENES:
-            gen = {"intro": lambda: intro_frames(arg, caption, args.speed),
-                   "clip": lambda: clip_frames(*arg, caption, args.speed),
+            gen = {"clip": lambda: clip_frames(*arg, caption, args.speed),
                    "grid": lambda: grid_frames(arg, caption, args.speed)}[kind]()
             n, acc, last = 0, 0.0, None
             for fr in gen:          # 速度 s なら、s フレームごとに 1 枚を書く

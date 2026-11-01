@@ -41,7 +41,8 @@ def result(root, tag, cond, seed):
     return None
 
 
-def make_clip(condition, seed, caption="", root="outputs/eval", out=None):
+def make_clip(condition, seed, caption="", root="outputs/eval", out=None, follow=(0, 1, 2)):
+    """follow: 動画の長さを決める列(既定は全部)。(1, 2) なら学習後と教師が終わった時点で切る(学習前は途中で止まる)。"""
     out = out or f"outputs/video/clips/{condition}_s{seed}.mp4"
     os.makedirs(os.path.dirname(out), exist_ok=True)
 
@@ -79,7 +80,8 @@ def make_clip(condition, seed, caption="", root="outputs/eval", out=None):
                 readers.append(None)
                 continue
             rd = stack.enter_context(mediapy.VideoReader(p))
-            T = max(T, min(rd.num_images, limits[len(readers)] or rd.num_images))
+            if len(readers) in follow:
+                T = max(T, min(rd.num_images, limits[len(readers)] or rd.num_images))
             readers.append(iter(rd))
         last = [None] * 3
         with mediapy.VideoWriter(out, shape=(H, W), fps=15) as w:
