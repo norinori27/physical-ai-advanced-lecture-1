@@ -23,17 +23,25 @@ def run(job):
     cond, seed, sigma, out, max_steps = job
     import mediapy
     from gen_demos import run_episode
+    from rejudge_strict import judge
     info, data = run_episode(seed, render=True, dart_sigma=sigma, condition=cond, max_steps=max_steps)
     frames = np.concatenate([data["exterior_image_1_left"], data["wrist_image_left"]], 2)
     mediapy.write_video(os.path.join(out, f"{cond}_s{seed}.mp4"), frames, fps=15)
     t = info["task"]
     box = np.asarray(info["box_final"])
     lifted = info["phase_box"].get("lift", [0, 0, 0])[2] > 0.035 + 0.04
+    # 学習後のモデルと同じ厳しい定義(rejudge_strict.py: 置いて 8 ステップ、離して 5 cm 以上上げたのが 1 ステップ)
+    j = judge(data, release_cm=5.0, hold=1)
+    s_out = "success" if j["t_release"] is not None else ("placed_not_released" if j["t_place"] is not None else None)
     return {"tag": "teacher", "condition": cond, "seed": seed, "task": t, "success": bool(info["success"]),
             "outcome": "success" if info["success"] else ("misplaced" if lifted else "no_grasp"), "lifted": bool(lifted),
             "steps": info["steps"], "box_final": box.tolist(),
             "dist_to_target": float(np.hypot(box[0] - t["target_xy"][0], box[1] - t["target_xy"][1])),
-            "phase_steps": info["phase_steps"], "dart_sigma": sigma}
+            "phase_steps": info["phase_steps"], "dart_sigma": sigma,
+            "strict": {"release_cm": 5.0, "hold": 1, "success": s_out == "success",
+                       "outcome": s_out or ("misplaced" if lifted else "no_grasp"),
+                       "t": None if j["t_release"] is None else j["t_release"] + 1, "dist_to_target": j["dist"],
+                       "t_place": None if j["t_place"] is None else j["t_place"] + 1, "end": j}}
 
 
 def main():
@@ -43,7 +51,7 @@ def main():
     ap.add_argument("--seeds", type=int, default=10)
     ap.add_argument("--dart-sigma", type=float, default=0.0)
     ap.add_argument("--max-steps", type=int, default=450)
-    ap.add_argument("--out", default="outputs/eval/teacher")
+    ap.add_argument("--out", default="outputs/eval/teacher_strict")
     ap.add_argument("--workers", type=int, default=6)     # 描画も CPU を使うので、合計 8 以下(CLAUDE.md)
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)

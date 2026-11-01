@@ -77,6 +77,9 @@ def run_episode(seed, render=True, dart_sigma=DART_SIGMA, condition="train", tas
     YAW_RATE = np.deg2rad(4)     # 1 ステップのヨーの変化の上限
 
     ext, wrist, qs, grips, acts, phases = [], [], [], [], [], []
+    tcps, boxes, pad_contact = [], [], []       # 厳しい定義(置いて、離して、上げる)の判定用。動かした後の状態
+    box_gid = env.m.geom("box_geom").id
+    pads = {env.m.geom("openarm_left_finger_pad").id, env.m.geom("openarm_right_finger_pad").id}
     phase_box = {}       # 各段階の終わりの箱の位置(失敗の分類用)
     obs = env.obs(task.prompt) if render else None
     for name, p_goal, g, n_min, n_max, lim, yaw_t in plan:
@@ -113,6 +116,10 @@ def run_episode(seed, render=True, dart_sigma=DART_SIGMA, condition="train", tas
             a_exec = a.copy()
             a_exec[:7] = np.clip(a[:7] + rng.normal(0, sigma, 7), -1, 1)
             env.step(a_exec)
+            tcps.append(env.kin.fk(env.d.qpos[:7])[0])
+            boxes.append(env.box_pos().copy())
+            pad_contact.append(sum(1 for c in env.d.contact[:env.d.ncon]
+                                   if {c.geom1, c.geom2} & pads and box_gid in (c.geom1, c.geom2)))
             if render:
                 obs = env.obs(task.prompt)
         phase_box[name] = np.round(env.box_pos(), 3).tolist()
@@ -127,7 +134,9 @@ def run_episode(seed, render=True, dart_sigma=DART_SIGMA, condition="train", tas
         data = dict(exterior_image_1_left=np.array(ext, np.uint8), wrist_image_left=np.array(wrist, np.uint8),
                     joint_position=np.array(qs, np.float32), gripper_position=np.array(grips, np.float32)[:, None],
                     actions=np.array(acts, np.float32), prompt=np.array(task.prompt),
-                    phase=np.array(phases), task_json=np.array(json.dumps(task.to_dict())))
+                    phase=np.array(phases), task_json=np.array(json.dumps(task.to_dict())),
+                    tcp=np.array(tcps, np.float32), box_pos=np.array(boxes, np.float32),
+                    pad_contact=np.array(pad_contact, np.int16))
     return info, data
 
 
