@@ -127,7 +127,7 @@ def train(exp: str, steps: int, smoke: bool = False, resume: bool = False, overw
     ckpt.commit()
 
 
-@app.function(volumes=VOLS, gpu=["L40S", "A100-40GB", "A100-80GB"], timeout=3 * 3600)
+@app.function(volumes=VOLS, gpu=["L40S", "A100-40GB", "A100-80GB"], cpu=8, memory=65536, timeout=8 * 3600)
 def val(exp: str, steps: str = "", base: bool = False, split: str = "val"):
     _extract_datasets()
     cmd = UV + [f"{PROJECT}/scripts/openpi_val.py", "--exp-name", exp, "--split", split]
