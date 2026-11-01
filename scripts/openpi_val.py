@@ -3,9 +3,12 @@
   loss      : 学習と同じ flow matching の損失(雑音・時刻・前処理の乱数は固定。train=False で画像の拡張なし)
   act_mse   : 雑音を固定して行動を出させ(sample_actions、10 ステップ)、教師の行動との二乗誤差
               (正規化後の空間、先頭 8 ステップ × 8 次元 = 実行する部分)
-結果は <ckpt_dir>/val.json に追記する(計算済みのステップは飛ばす)。
+--split train で、学習データの一部で同じ指標を測る(過学習の確認用。学習ロスは拡張と乱数が入るので直接は比べにくい)。
+バッチは全エピソードから、種を固定したシャッフルで選ぶ(config.seed。全ステップ・同じ split で同じフレーム)。
+結果は <ckpt_dir>/metrics_<split>.json に追記する(計算済みのステップは飛ばす)。
+(10-31〜11-01 の val.json は shuffle なしで先頭 128 フレーム = 検証の最初の 1 本だけで計算していた)
 
-使い方: uv run --no-sync python openpi_val.py --exp-name run1 [--steps 1000 2000] [--num-batches 8]
+使い方: uv run --no-sync python openpi_val.py --exp-name run1 [--split val|train] [--steps 1000 2000] [--num-batches 16]
 """
 import argparse
 import json
@@ -19,7 +22,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--exp-name", required=True)
     ap.add_argument("--steps", type=int, nargs="*", default=None)
-    ap.add_argument("--num-batches", type=int, default=8)
+    ap.add_argument("--split", choices=["val", "train"], default="val")
+    ap.add_argument("--num-batches", type=int, default=16)
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--base", action="store_true", help="微調整前(pi05_droid の重み)も同じ指標で測る")
     args = ap.parse_args()
@@ -35,15 +39,15 @@ def main():
     import openpi_cfg
 
     cfg = openpi_cfg.with_repo(openpi_cfg.make_config(args.exp_name, batch_size=args.batch_size, num_workers=0),
-                               openpi_cfg.VAL_REPO_ID)
+                               openpi_cfg.VAL_REPO_ID if args.split == "val" else openpi_cfg.REPO_ID)
     ckpt_dir = pathlib.Path(cfg.checkpoint_dir)
-    out_path = ckpt_dir / "val.json"
+    out_path = ckpt_dir / f"metrics_{args.split}.json"
     results = json.loads(out_path.read_text()) if out_path.exists() else {}
 
-    # 検証用のバッチを固定して先に作る(全ステップで同じバッチを使う)
-    loader = _data_loader.create_data_loader(cfg, shuffle=False, num_batches=args.num_batches)
+    # バッチを固定して先に作る(全ステップで同じバッチを使う)。shuffle は種を固定した torch.Generator なので毎回同じ
+    loader = _data_loader.create_data_loader(cfg, shuffle=True, num_batches=args.num_batches)
     batches = list(loader)
-    print(f"val batches: {len(batches)} x {args.batch_size}", flush=True)
+    print(f"{args.split} batches: {len(batches)} x {args.batch_size}", flush=True)
 
     targets = {}
     if args.base:

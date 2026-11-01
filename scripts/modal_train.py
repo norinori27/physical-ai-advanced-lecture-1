@@ -128,15 +128,15 @@ def train(exp: str, steps: int, smoke: bool = False, resume: bool = False, overw
 
 
 @app.function(volumes=VOLS, gpu=["L40S", "A100-40GB", "A100-80GB"], timeout=3 * 3600)
-def val(exp: str, steps: str = "", base: bool = False):
+def val(exp: str, steps: str = "", base: bool = False, split: str = "val"):
     _extract_datasets()
-    cmd = UV + [f"{PROJECT}/scripts/openpi_val.py", "--exp-name", exp]
+    cmd = UV + [f"{PROJECT}/scripts/openpi_val.py", "--exp-name", exp, "--split", split]
     cmd += ["--steps", *steps.split(",")] if steps else []
     cmd += ["--base"] if base else []
-    _run(cmd, log=f"/ckpt/logs/{exp}_val.log")
+    _run(cmd, log=f"/ckpt/logs/{exp}_{split}_metrics.log")
     ckpt.commit()
     import json
-    return json.loads(pathlib.Path(f"/ckpt/checkpoints/openarm_pi05_lora/{exp}/val.json").read_text())
+    return json.loads(pathlib.Path(f"/ckpt/checkpoints/openarm_pi05_lora/{exp}/metrics_{split}.json").read_text())
 
 
 @app.function(volumes=VOLS, gpu=["L4", "L40S", "A100-40GB"], cpu=4, timeout=6 * 3600)
@@ -209,7 +209,7 @@ def param_delta(exp: str, step: int):
 @app.local_entrypoint()
 def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, seeds: int = 5, conditions: str = "",
          tag: str = "", val_steps: str = "", resume: bool = False, overwrite: bool = False, max_steps: int = 450,
-         episodes_tag: str = "", what: str = ""):
+         episodes_tag: str = "", what: str = "", split: str = "val"):
     if action == "upload":
         with data.batch_upload(force=True) as b:
             b.put_directory(str(ROOT / "data" / "demos"), "/npz/demos")
@@ -237,7 +237,11 @@ def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, see
         call = train.spawn(exp, steps, resume=resume, overwrite=overwrite)
         print("spawned:", call.object_id, "(--detach で実行していれば、端末を閉じても続く)")
     elif action == "val":
-        print(val.remote(exp, steps=val_steps, base=True))
+        print(val.remote(exp, steps=val_steps, base=True, split=split))
+    elif action == "val_both":     # 検証データと学習データの指標を、別のコンテナで同時に計算する
+        calls = [val.spawn(exp, steps=val_steps, base=True, split=sp) for sp in ("val", "train")]
+        for sp, c in zip(("val", "train"), calls):
+            print(sp, c.get())
     elif action == "eval":
         evaluate.remote(tag or f"{exp}_s{step}", exp=exp, step=step, conditions=conditions, seeds=seeds, max_steps=max_steps)
     elif action == "eval_base":
