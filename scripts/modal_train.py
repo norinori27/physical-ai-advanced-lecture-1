@@ -184,9 +184,10 @@ def evaluate(tag: str, exp: str = "", step: int = 0, base: bool = False, conditi
 
 @app.function(volumes=VOLS, gpu=["L40S", "A100-40GB", "A100-80GB"], timeout=4 * 3600)
 def analyze(tag: str, exp: str = "", step: int = 0, base: bool = False, episodes_tag: str = "", what: str = "",
-            max_episodes: int = 6):
+            max_episodes: int = 6, per_condition: int = 2):
     cmd = UV + [f"{PROJECT}/scripts/analyze_policy.py", "--episodes", f"/ckpt/eval/{episodes_tag or tag}",
-                "--out", f"/ckpt/analysis/{tag}", "--max-episodes", str(max_episodes)]
+                "--out", f"/ckpt/analysis/{tag}", "--max-episodes", str(max_episodes),
+                "--per-condition", str(per_condition)]
     cmd += ["--base"] if base else ["--exp-name", exp, "--step", str(step)]
     cmd += ["--what", *what.split(",")] if what else []
     _run(cmd, log=f"/ckpt/logs/analysis_{tag}.log")

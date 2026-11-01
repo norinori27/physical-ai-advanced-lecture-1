@@ -70,7 +70,8 @@ def main():
     ap.add_argument("--episodes", required=True, help="eval_vla.py の出力フォルダ(npz)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--what", nargs="+", default=["noise", "camera", "prompt", "state", "occlusion", "attention", "lora"])
-    ap.add_argument("--max-episodes", type=int, default=6)
+    ap.add_argument("--max-episodes", type=int, default=6, help="--per-condition が 0 のとき、ファイル名順の先頭から")
+    ap.add_argument("--per-condition", type=int, default=0, help="条件ごとに seed の小さい順に何本ずつ調べるか")
     ap.add_argument("--frames", default="start,pregrasp,carry", help="各エピソードで調べる時点")
     ap.add_argument("--n-noise", type=int, default=16)
     ap.add_argument("--grid", default="6,10", help="遮蔽の格子(縦,横)")
@@ -116,7 +117,15 @@ def main():
                "episodes": []}
     rng = np.random.default_rng(0)
     noise0 = np.asarray(jax.random.normal(jax.random.key(0), (H, A)))
-    files = sorted(glob.glob(os.path.join(args.episodes, "*.npz")))[:args.max_episodes]
+    files = sorted(glob.glob(os.path.join(args.episodes, "*.npz")))
+    if args.per_condition > 0:     # ファイル名は <条件>_s<seed>.npz
+        by = {}
+        for f in files:
+            by.setdefault(os.path.basename(f).rsplit("_s", 1)[0], []).append(f)
+        files = [f for fs in by.values() for f in fs[:args.per_condition]]
+    else:
+        files = files[:args.max_episodes]
+    print(f"{len(files)} episodes:", [os.path.basename(f) for f in files], flush=True)
     for f in files:
         d = np.load(f)
         ep = {k: d[k] for k in d.files if k != "task_json"}
