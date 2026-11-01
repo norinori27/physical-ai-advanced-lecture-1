@@ -200,13 +200,24 @@ def dagger_relabel(tags: str, out: str = "/data/npz/demos_dagger1"):
     ckpt.commit()
 
 
+@app.function(volumes=VOLS, cpu=16, memory=32768, timeout=2 * 3600)
+def dagger_collect(tags: str, out: str = "/data/npz/demos_dagger1"):
+    """DAgger(切り替え型): モデルがずれた時点から教師で動かし、置けた軌道だけを残す(scripts/dagger_collect.py)。"""
+    import shutil
+    shutil.rmtree(out, ignore_errors=True)
+    _run(["python", "scripts/dagger_collect.py", "--src", *[f"/ckpt/eval/{t}" for t in tags.split(",")],
+          "--out", out, "--workers", "16", "--per-episode", "4"], log="/ckpt/logs/dagger_collect.log")
+    data.commit()
+    ckpt.commit()
+
+
 @app.function(volumes=VOLS, cpu=2, timeout=24 * 3600)
 def dagger_pipeline(tags: str, exp: str, steps: int, init_exp: str, init_step: int, seeds: int = 10, dagger_only: bool = False):
     """正解付け → 変換 → 学習(init の重みから続ける)→ 評価(厳しい定義)を続けて行う。端末を閉じても進むよう、全部を Modal の中で呼ぶ。"""
     import json
     import pathlib
-    print("1/4 relabel", flush=True)
-    dagger_relabel.remote(tags)
+    print("1/4 collect(切り替えて教師で動かし、置けた軌道だけ残す)", flush=True)
+    dagger_collect.remote(tags)
     print("2/4 convert", flush=True)
     name = "dagger1only" if dagger_only else "dagger1"     # 正解を付けた記録だけ / 元の 240 本 + 記録
     convert.remote(name)
