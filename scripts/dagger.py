@@ -33,7 +33,7 @@ from gen_demos import DELTA, LIFT  # noqa: E402
 
 HOVER, FAST, SLOW = 0.13, 0.016, 0.006
 YAW_RATE = np.deg2rad(4)
-HOLD_YAW = os.environ.get("DAGGER_HOLD_YAW", "goal")
+HOLD_YAW = os.environ.get("DAGGER_HOLD_YAW", "now")   # 箱を持っている間は手首の向きを変えない(モデルの状態から急に回すと腕が跳ねた)
 YAW_TOL = np.deg2rad(12)   # 箱の向きとのずれがこれ以内なら降りる(手首が回りきらず届かない向きがある。指は 10° 程度のずれを吸収する)
 LATERAL_TOL = 0.01         # 箱を持っているとき、これ以上ずれていたら降ろさずに直す(m)
 FAR = 0.05                 # これ以上ずれていたら運搬の高さに戻して運ぶ
