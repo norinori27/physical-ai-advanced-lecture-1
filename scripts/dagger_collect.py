@@ -139,6 +139,8 @@ def main():
     ap.add_argument("--workers", type=int, default=8)
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
+    from openarm_anomaly.vla_env import DroidStyleEnv
+    DroidStyleEnv(markers=True).close()     # 描画用の間引いたメッシュのキャッシュを、並列処理の前に 1 回だけ作る
     files = sorted(f for d in args.src for f in glob.glob(os.path.join(d, "*.npz")))
     allres = []
     with get_context("spawn").Pool(args.workers) as pool:

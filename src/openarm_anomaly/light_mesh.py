@@ -4,6 +4,7 @@
 VLA の入力は 224x224 程度なので細部は要らない。間引いた頂点・面をキャッシュし、MjSpec のメッシュへ直接入れる。
 色は XML のマテリアルで決まるので、形状だけの置き換えで済む。物理には関わらない(衝突は無い)。
 """
+import os
 from pathlib import Path
 
 import numpy as np
@@ -29,7 +30,10 @@ def _build_cache(spec, target_faces):
             v, f = fast_simplification.simplify(v.astype(np.float32), f, target_reduction=ratio)
         out[mesh.name + "__v"], out[mesh.name + "__f"] = np.asarray(v, np.float64), np.asarray(f, np.int32)
     CACHE.parent.mkdir(exist_ok=True)
-    np.savez_compressed(CACHE, **out)
+    # 一時ファイルに書いてから置き換える(複数のプロセスが同時に作っても、書きかけを読まない)
+    tmp = CACHE.with_name(f"{CACHE.stem}.{os.getpid()}.tmp.npz")
+    np.savez_compressed(tmp, **out)
+    os.replace(tmp, CACHE)
 
 
 def lighten_visual_meshes(spec, target_faces=1500):
