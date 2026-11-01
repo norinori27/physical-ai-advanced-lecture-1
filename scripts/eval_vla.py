@@ -46,9 +46,13 @@ def classify(env, task, lifted, events):
     return "dropped" if events.get("dropped_far") else "misplaced"
 
 
-def run(policy_infer, task, max_steps, horizon, record_images=True, post_steps=0):
-    """post_steps > 0: 成功と判定した後も、その本数だけ方策を動かし続ける(放した後に手を上げるところまで撮るため)。
-    結果(outcome、dist_to_target など)は、これまでと同じく成功と判定した時点の値。後の様子は summary["post"] に入れる。"""
+def run(policy_infer, task, max_steps, horizon, record_images=True, post_steps=0, release_cm=0.0):
+    """成功の定義は 2 つ。
+    従来(outcome / success): 箱がゴールの上で机に置かれ、グリッパが半分以上開いた状態が 8 ステップ続く。その時点で判定する。
+    厳しい定義(release_cm > 0 のとき summary["strict"]): 従来の条件に加えて、指先のパッドが箱に触れておらず、
+      手先(指先の中心)が箱の中心より release_cm 以上高い状態が 8 ステップ続く。手を離して上げたことまで求める。
+    打ち切り: release_cm > 0 なら厳しい定義の成功から、そうでなければ従来の成功から post_steps 後(または max_steps)。
+    結果(outcome、dist_to_target など)は、従来の成功と判定した時点の値(成功しなければ最後の値)。"""
     import mujoco
     from openarm_anomaly.task import apply_task, place_success
     from openarm_anomaly.vla_env import DroidStyleEnv
@@ -67,8 +71,8 @@ def run(policy_infer, task, max_steps, horizon, record_images=True, post_steps=0
                            "pad_contact", "q_openarm"]}
     chunks, chunk_t, infer_ms = [], [], []
     pending = np.zeros((0, 8))
-    lifted, events, success_run = False, {}, 0
-    at_success, end_t = None, max_steps
+    lifted, events, success_run, strict_run = False, {}, 0, 0
+    at_success, at_strict, end_t = None, None, max_steps
     obs = env.obs(task.prompt)
     for t in range(max_steps):
         if t >= end_t:
@@ -104,14 +108,32 @@ def run(policy_infer, task, max_steps, horizon, record_images=True, post_steps=0
         if lifted and d.qpos[jb + 2] < env.box_half + 0.01 and env.gripper_position() > 0.5:
             events.setdefault("dropped_far", True)
         obs = env.obs(task.prompt)
-        success_run = success_run + 1 if place_success(env, task) else 0
+        placed = place_success(env, task)
+        success_run = success_run + 1 if placed else 0
         if at_success is None and success_run >= 8:     # 置いて放した状態が 8 ステップ続いたら成功(ここで判定する)
             at_success = {"t": t + 1, "box": env.box_pos().copy(), "outcome": classify(env, task, lifted, events)}
-            end_t = t + 1 + post_steps
-    post = None
+            if release_cm <= 0:
+                end_t = t + 1 + post_steps
+        if release_cm > 0:
+            released = placed and rec["pad_contact"][-1] == 0 and rec["tcp"][-1][2] - d.qpos[jb + 2] >= release_cm / 100
+            strict_run = strict_run + 1 if released else 0
+            if at_strict is None and strict_run >= 8:
+                at_strict = {"t": t + 1, "box": env.box_pos().copy()}
+                end_t = t + 1 + post_steps
+    post, strict = None, None
+    if release_cm > 0:
+        if at_strict is not None:
+            s_out, s_box = "success", at_strict["box"]
+        elif at_success is not None:
+            s_out, s_box = "placed_not_released", env.box_pos()    # 置いたが、手を離して上げなかった(または途中で崩した)
+        else:
+            s_out, s_box = classify(env, task, lifted, events), env.box_pos()
+        strict = {"release_cm": release_cm, "success": s_out == "success", "outcome": s_out,
+                  "t": at_strict["t"] if at_strict else None,
+                  "dist_to_target": float(np.hypot(s_box[0] - task.target_xy[0], s_box[1] - task.target_xy[1]))}
     if at_success is not None:
         outcome, box = at_success["outcome"], at_success["box"]
-        if post_steps > 0:      # 成功の後の様子: 箱が動いていないか、手が離れたか
+        if post_steps > 0 or release_cm > 0:      # 成功の後の様子: 箱が動いていないか、手が離れたか
             box_end = env.box_pos()
             tcp_end = env.kin.fk(d.qpos[:7])[0]
             post = {"steps": int(len(rec["action"]) - at_success["t"]), "still_on_target": bool(place_success(env, task)),
@@ -131,6 +153,8 @@ def run(policy_infer, task, max_steps, horizon, record_images=True, post_steps=0
                "reach_err_box": reach["box"], "reach_err_goal": reach["goal"], "n_frames": len(rec["action"])}
     if post is not None:
         summary["post"] = post
+    if strict is not None:
+        summary["strict"] = strict
     return summary, rec
 
 
@@ -148,6 +172,8 @@ def main():
     ap.add_argument("--horizon", type=int, default=8)
     ap.add_argument("--out", default="outputs/eval")
     ap.add_argument("--post-steps", type=int, default=0, help="成功の後も動かし続けるステップ数(動画用。判定は成功時点)")
+    ap.add_argument("--release-cm", type=float, default=0.0,
+                    help="厳しい成功の定義(手が箱の中心より何 cm 上に離れたか)も判定し、それまで動かし続ける。0 で使わない")
     ap.add_argument("--only", nargs="*", default=None, help="この試行だけ(例: base:500001 goal_color:500004)")
     ap.add_argument("--fake", choices=["zero"])
     args = ap.parse_args()
@@ -178,7 +204,8 @@ def main():
                 print(f"{cond}_s{seed}: done, skip", flush=True)
                 continue
             task = sample_task(np.random.default_rng(seed), cond, seed)
-            summary, rec = run(policy_infer, task, args.max_steps, args.horizon, post_steps=args.post_steps)
+            summary, rec = run(policy_infer, task, args.max_steps, args.horizon, post_steps=args.post_steps,
+                               release_cm=args.release_cm)
             name = f"{cond}_s{seed}"
             np.savez_compressed(os.path.join(out_dir, name + ".npz"), task_json=json.dumps(task.to_dict()), **rec)
             mediapy.write_video(os.path.join(out_dir, name + ".mp4"), np.concatenate([rec["ext"], rec["wrist"]], 2), fps=15)

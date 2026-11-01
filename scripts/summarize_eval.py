@@ -27,11 +27,12 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 CONDITIONS = ("base", "pos_outer", "goal_color", "light", "box_color", "language")
 # 到達段階(順序のある分類)。色は 1 色の濃淡(薄い = 手前の段階で失敗、濃い = 成功に近い)
-STAGES = ("no_grasp", "grasped", "lifted", "placed_off", "success")
+STAGES = ("no_grasp", "grasped", "lifted", "placed_off", "placed_not_released", "success")
 STAGE_LABEL = {"no_grasp": "no grasp", "grasped": "grasped, not lifted", "lifted": "lifted, dropped / still holding",
-               "placed_off": "placed off target", "success": "success"}
-STAGE_COLOR = {"no_grasp": "#cde2fb", "grasped": "#9ec5f4", "lifted": "#5598e7", "placed_off": "#256abf",
-               "success": "#0d366b"}
+               "placed_off": "placed off target", "placed_not_released": "placed, hand not lifted away",
+               "success": "success"}
+STAGE_COLOR = {"no_grasp": "#cde2fb", "grasped": "#9ec5f4", "lifted": "#6da7ec", "placed_off": "#3987e5",
+               "placed_not_released": "#1c5cab", "success": "#0d366b"}
 INK, MUTED, SURFACE = "#0b0b0b", "#52514e", "#fcfcfb"
 
 
@@ -48,6 +49,8 @@ def stage(r):
     o = r["outcome"]
     if o == "success":
         return "success"
+    if o == "placed_not_released":
+        return "placed_not_released"
     if o in ("misplaced", "wrong_marker") and r.get("lifted"):
         return "placed_off"
     if r.get("lifted") or o in ("dropped", "holding"):
@@ -77,12 +80,16 @@ def mcnemar_exact(b, c):
     return min(1.0, 2 * p)
 
 
-def load(root, tag):
+def load(root, tag, strict=False):
+    """strict: 厳しい定義(置いて、離して、上げる)の結果があれば、それで成功・結果・距離を置き換える。"""
     rows = {}
     with open(os.path.join(root, tag, "results.jsonl")) as f:
         for line in f:
             if line.strip():
                 r = json.loads(line)
+                if strict and "strict" in r:
+                    r = {**r, "success": r["strict"]["success"], "outcome": r["strict"]["outcome"],
+                         "dist_to_target": r["strict"]["dist_to_target"]}
                 rows[(r["condition"], r["seed"])] = r     # 同じ試行が 2 回あれば後の方
     return rows
 
@@ -92,10 +99,11 @@ def main():
     ap.add_argument("--tags", nargs="+", required=True)
     ap.add_argument("--root", default="outputs/eval")
     ap.add_argument("--out", default="outputs/eval/summary")
+    ap.add_argument("--strict", action="store_true", help="厳しい定義(置いて、離して、上げる)の結果で集計する(ある試行だけ)")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
 
-    data = {t: load(args.root, t) for t in args.tags}
+    data = {t: load(args.root, t, args.strict) for t in args.tags}
     summary, md = {}, []
     for tag, rows in data.items():
         by = defaultdict(list)

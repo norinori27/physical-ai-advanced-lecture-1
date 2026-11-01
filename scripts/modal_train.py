@@ -141,7 +141,7 @@ def val(exp: str, steps: str = "", base: bool = False, split: str = "val"):
 
 @app.function(volumes=VOLS, gpu=["L4", "L40S", "A100-40GB"], cpu=4, timeout=6 * 3600)
 def evaluate(tag: str, exp: str = "", step: int = 0, base: bool = False, conditions: str = "", seeds: int = 5,
-             max_steps: int = 450, post_steps: int = 0, only: str = ""):
+             max_steps: int = 450, post_steps: int = 0, only: str = "", release_cm: float = 0.0):
     import subprocess
     import time
 
@@ -178,6 +178,7 @@ def evaluate(tag: str, exp: str = "", step: int = 0, base: bool = False, conditi
         cmd += ["--conditions", *conditions.split(",")] if conditions else []
         cmd += ["--post-steps", str(post_steps)] if post_steps else []
         cmd += ["--only", *only.split(",")] if only else []
+        cmd += ["--release-cm", str(release_cm)] if release_cm else []
         _run(cmd)
     finally:
         server.terminate()
@@ -212,7 +213,8 @@ def param_delta(exp: str, step: int):
 @app.local_entrypoint()
 def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, seeds: int = 5, conditions: str = "",
          tag: str = "", val_steps: str = "", resume: bool = False, overwrite: bool = False, max_steps: int = 450,
-         episodes_tag: str = "", what: str = "", split: str = "val", post_steps: int = 0, only: str = ""):
+         episodes_tag: str = "", what: str = "", split: str = "val", post_steps: int = 0, only: str = "",
+         release_cm: float = 0.0):
     if action == "upload":
         with data.batch_upload(force=True) as b:
             b.put_directory(str(ROOT / "data" / "demos"), "/npz/demos")
@@ -246,9 +248,10 @@ def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, see
         for sp, c in zip(("val", "train"), calls):
             print(sp, c.get())
     elif action == "eval":
-        # 例(動画用に、成功の後も 3 秒動かす): --step 14999 --seeds 10 --post-steps 45 --tag run1_s14999_post
+        # 例(教師と同じ「置いて、離して、上げる」までを成功とし、その後 1 秒撮る):
+        #   --step 14999 --seeds 10 --release-cm 5 --post-steps 15 --tag run1_s14999_strict
         evaluate.remote(tag or f"{exp}_s{step}", exp=exp, step=step, conditions=conditions, seeds=seeds, max_steps=max_steps,
-                        post_steps=post_steps, only=only)
+                        post_steps=post_steps, only=only, release_cm=release_cm)
     elif action == "eval_base":
         evaluate.remote(tag or "base", base=True, conditions=conditions, seeds=seeds, max_steps=max_steps)
     elif action == "analyze":     # 例: --action analyze --exp run1 --step 8000 --tag run1_s8000 [--episodes-tag base]
