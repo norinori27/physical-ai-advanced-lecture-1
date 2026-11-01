@@ -214,7 +214,7 @@ def param_delta(exp: str, step: int):
 def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, seeds: int = 5, conditions: str = "",
          tag: str = "", val_steps: str = "", resume: bool = False, overwrite: bool = False, max_steps: int = 450,
          episodes_tag: str = "", what: str = "", split: str = "val", post_steps: int = 0, only: str = "",
-         release_cm: float = 0.0):
+         release_cm: float = 0.0, per_condition: int = 2, max_episodes: int = 6):
     if action == "upload":
         with data.batch_upload(force=True) as b:
             b.put_directory(str(ROOT / "data" / "demos"), "/npz/demos")
@@ -260,9 +260,16 @@ def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, see
         print("spawned:", call.object_id, flush=True)
         call.get()
     elif action == "analyze":     # 例: --action analyze --exp run1 --step 8000 --tag run1_s8000 [--episodes-tag base]
-        analyze.remote(tag or f"{exp}_s{step}", exp=exp, step=step, episodes_tag=episodes_tag, what=what)
+        # 試しに 1 本: --per-condition 0 --max-episodes 1 --what noise,camera,prompt
+        call = analyze.spawn(tag or f"{exp}_s{step}", exp=exp, step=step, episodes_tag=episodes_tag, what=what,
+                             max_episodes=max_episodes, per_condition=per_condition)
+        print("spawned:", call.object_id, flush=True)
+        call.get()
     elif action == "analyze_base":
-        analyze.remote(tag or "base", base=True, episodes_tag=episodes_tag, what=what)
+        call = analyze.spawn(tag or "base", base=True, episodes_tag=episodes_tag, what=what,
+                             max_episodes=max_episodes, per_condition=per_condition)
+        print("spawned:", call.object_id, flush=True)
+        call.get()
     elif action == "param_delta":     # 例: --action param_delta --exp run1_smoke --step 199
         param_delta.remote(exp, step)
     elif action == "fetch":
