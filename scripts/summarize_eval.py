@@ -40,8 +40,10 @@ def tag_label(tag):
     """図のタイトル。タグ base(学習前)は条件の base と紛らわしいので言い換える。"""
     if tag == "base":
         return "zero-shot (pi05_droid)"
+    if tag.startswith("teacher"):
+        return "teacher (scripted)"
     if tag.startswith("run") and "_s" in tag:
-        return f"fine-tuned ({tag.split('_s')[0]}, step {tag.split('_s')[1]})"
+        return f"fine-tuned ({tag.split('_s')[0]}, step {tag.split('_s')[1].split('_')[0]})"
     return tag
 
 
