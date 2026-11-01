@@ -250,10 +250,15 @@ def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, see
     elif action == "eval":
         # 例(教師と同じ「置いて、離して、上げる」までを成功とし、その後 1 秒撮る):
         #   --step 14999 --seeds 10 --release-cm 5 --post-steps 15 --tag run1_s14999_strict
-        evaluate.remote(tag or f"{exp}_s{step}", exp=exp, step=step, conditions=conditions, seeds=seeds, max_steps=max_steps,
-                        post_steps=post_steps, only=only, release_cm=release_cm)
+        # .remote() だと、--detach でも手元の接続が切れたときに呼び出しがキャンセルされた(11-01)。spawn で別の呼び出しにする
+        call = evaluate.spawn(tag or f"{exp}_s{step}", exp=exp, step=step, conditions=conditions, seeds=seeds,
+                              max_steps=max_steps, post_steps=post_steps, only=only, release_cm=release_cm)
+        print("spawned:", call.object_id, "(--detach で実行していれば、端末を閉じても続くはず)", flush=True)
+        call.get()
     elif action == "eval_base":
-        evaluate.remote(tag or "base", base=True, conditions=conditions, seeds=seeds, max_steps=max_steps)
+        call = evaluate.spawn(tag or "base", base=True, conditions=conditions, seeds=seeds, max_steps=max_steps)
+        print("spawned:", call.object_id, flush=True)
+        call.get()
     elif action == "analyze":     # 例: --action analyze --exp run1 --step 8000 --tag run1_s8000 [--episodes-tag base]
         analyze.remote(tag or f"{exp}_s{step}", exp=exp, step=step, episodes_tag=episodes_tag, what=what)
     elif action == "analyze_base":
