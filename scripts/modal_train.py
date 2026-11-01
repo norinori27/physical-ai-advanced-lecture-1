@@ -141,7 +141,7 @@ def val(exp: str, steps: str = "", base: bool = False, split: str = "val"):
 
 @app.function(volumes=VOLS, gpu=["L4", "L40S", "A100-40GB"], cpu=4, timeout=6 * 3600)
 def evaluate(tag: str, exp: str = "", step: int = 0, base: bool = False, conditions: str = "", seeds: int = 5,
-             max_steps: int = 450, post_steps: int = 0, only: str = "", release_cm: float = 0.0):
+             max_steps: int = 450, post_steps: int = 0, only: str = "", release_cm: float = 0.0, seed0: int = 0):
     import subprocess
     import time
 
@@ -179,6 +179,7 @@ def evaluate(tag: str, exp: str = "", step: int = 0, base: bool = False, conditi
         cmd += ["--post-steps", str(post_steps)] if post_steps else []
         cmd += ["--only", *only.split(",")] if only else []
         cmd += ["--release-cm", str(release_cm)] if release_cm else []
+        cmd += ["--seed0", str(seed0)] if seed0 else []
         _run(cmd)
     finally:
         server.terminate()
@@ -215,7 +216,7 @@ def param_delta(exp: str, step: int):
 def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, seeds: int = 5, conditions: str = "",
          tag: str = "", val_steps: str = "", resume: bool = False, overwrite: bool = False, max_steps: int = 450,
          episodes_tag: str = "", what: str = "", split: str = "val", post_steps: int = 0, only: str = "",
-         release_cm: float = 0.0, per_condition: int = 2, max_episodes: int = 6):
+         release_cm: float = 0.0, per_condition: int = 2, max_episodes: int = 6, parts: int = 6, seed0: int = 700000):
     if action == "upload":
         with data.batch_upload(force=True) as b:
             b.put_directory(str(ROOT / "data" / "demos"), "/npz/demos")
@@ -256,6 +257,16 @@ def main(action: str, exp: str = "run1", steps: int = 15_000, step: int = 0, see
                               max_steps=max_steps, post_steps=post_steps, only=only, release_cm=release_cm)
         print("spawned:", call.object_id, "(--detach で実行していれば、端末を閉じても続くはず)", flush=True)
         call.get()
+    elif action == "dagger_rollouts":
+        # DAgger: 学習と同じ範囲(condition=train)の新しい配置で今のモデルを動かし、たどり着いた状態を記録する。
+        # parts 台の GPU に分ける。結果は eval/<tag>_p<i>/(同じ results.jsonl に複数のコンテナから書かないため)
+        #   例: --exp run1 --step 14999 --seeds 20 --parts 6 --tag dagger1   → seed 700000〜700119
+        tag = tag or "dagger1"
+        calls = [evaluate.spawn(f"{tag}_p{i}", exp=exp, step=step, conditions="train", seeds=seeds, max_steps=max_steps,
+                                release_cm=5.0, seed0=seed0 + i * seeds) for i in range(parts)]
+        print("spawned:", [c.object_id for c in calls], flush=True)
+        for c in calls:
+            c.get()
     elif action == "eval_base":
         call = evaluate.spawn(tag or "base", base=True, conditions=conditions, seeds=seeds, max_steps=max_steps)
         print("spawned:", call.object_id, flush=True)
