@@ -121,13 +121,16 @@ def run(policy_infer, task, max_steps, horizon, record_images=True, post_steps=0
                 at_strict = {"t": t + 1, "box": env.box_pos().copy()}
                 end_t = t + 1 + post_steps
     post, strict = None, None
+    final = classify(env, task, lifted, events)
+    if final == "success":      # 最後のフレームだけゴールの上(置いた状態が 8 ステップ続いていない、またはつかんだまま)は成功にしない
+        final = "holding" if rec["pad_contact"][-1] else "misplaced"
     if release_cm > 0:
         if at_strict is not None:
             s_out, s_box = "success", at_strict["box"]
         elif at_success is not None:
             s_out, s_box = "placed_not_released", env.box_pos()    # 置いたが、手を離して上げなかった(または途中で崩した)
         else:
-            s_out, s_box = classify(env, task, lifted, events), env.box_pos()
+            s_out, s_box = final, env.box_pos()
         strict = {"release_cm": release_cm, "success": s_out == "success", "outcome": s_out,
                   "t": at_strict["t"] if at_strict else None,
                   "dist_to_target": float(np.hypot(s_box[0] - task.target_xy[0], s_box[1] - task.target_xy[1]))}
@@ -142,7 +145,7 @@ def run(policy_infer, task, max_steps, horizon, record_images=True, post_steps=0
                     "pad_contact_end": int(rec["pad_contact"][-1]), "gripper_end": float(env.gripper_position())}
         t = at_success["t"] - 1
     else:
-        outcome = classify(env, task, lifted, events)
+        outcome = final
         box = env.box_pos()
     env.close()
     rec = {k: np.asarray(v) for k, v in rec.items() if len(v)}
